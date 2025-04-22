@@ -163,6 +163,15 @@ def analyze():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/analyze-financials", methods=["GET"])
+def analyze_financials():
+    ticker = request.args.get("ticker")
+    if not ticker:
+        return jsonify({"error": "Missing ticker symbol"}), 400
+
+    result = get_financial_summary(ticker)
+    return jsonify(result)
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
