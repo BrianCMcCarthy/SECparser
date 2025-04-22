@@ -18,7 +18,6 @@ TARGET_TAGS = {
     "us-gaap:incomelossfromcontinuingoperationsbeforeincometaxesextraordinaryitemsnoncontrollinginterest": "Pretax Income"
 }
 
-# Add this below TARGET_TAGS, before your route definitions
 def get_latest_filing_url(ticker, form_type="10-K"):
     cik_url = f"https://www.sec.gov/files/company_tickers.json"
     headers = {
@@ -57,17 +56,40 @@ def parse_sec_filing():
 
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; SECParserBot/1.0; brian.c.mccarthy@gmail.com)",
+            "User-Agent": "BrianSECParser/1.0 (youremail@example.com)",
             "Accept-Encoding": "gzip, deflate",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Connection": "keep-alive"
         }
+
         resp = requests.get(sec_url, headers=headers, timeout=20)
         resp.raise_for_status()
         tree = etree.HTML(resp.content)
 
         namespaces = {'ix': 'http://www.xbrl.org/2013/inlineXBRL'}
+        tags = tree.xpath("//ix:nonFraction", namespaces=namespaces)
 
+        values_by_tag = {}
+        for tag in tags:
+            name = tag.attrib.get("name", "").lower()
+            context = tag.attrib.get("contextRef", "").lower()
+            value = tag.text.strip() if tag.text else ""
+            value = value.replace(",", "")
+
+            if value.startswith("(") and value.endswith(")"):
+                value = "-" + value[1:-1]
+
+            try:
+                float_val = float(value)
+                # Prioritize contexts that are likely consolidated and recent
+                if any(kw in context for kw in ["current", "year", "q4", "duration", "consolidated"]):
+                    key = (name, context)
+                    if name in TARGET_TAGS:
+                        values_by_tag[key] = float_val
+            except:
+                continue
+
+        # Build result dictionary
         extracted = {
             "Filing URL": sec_url,
             "Revenue": "Not found",
@@ -76,35 +98,11 @@ def parse_sec_filing():
             "Net Income": "Not found"
         }
 
-        tags = tree.xpath("//ix:nonFraction | //ix:nonNumeric", namespaces=namespaces)
-        found_tags = {}
-
-        for tag in tags:
-            name = tag.attrib.get("name", "").lower()
-            context_ref = tag.attrib.get("contextRef", "")
-            if name in TARGET_TAGS:
-                value_str = tag.text.strip() if tag.text else ""
-                value_str = value_str.replace(',', '')
-                if value_str.startswith('(') and value_str.endswith(')'):
-                    value_str = '-' + value_str[1:-1]
-                try:
-                    float(value_str)
-                    tag_key = (name, context_ref)
-                    if tag_key not in found_tags:
-                        found_tags[tag_key] = value_str
-                except ValueError:
-                    pass
-
-        for (tag_name, context), value in found_tags.items():
-            target_field = TARGET_TAGS.get(tag_name)
-            if target_field == "Revenue" and extracted["Revenue"] == "Not found":
-                extracted["Revenue"] = value
-            elif target_field == "Gross Profit" and extracted["Gross Profit"] == "Not found":
-                extracted["Gross Profit"] = value
-            elif target_field == "SG&A" and extracted["SG&A"] == "Not found":
-                extracted["SG&A"] = value
-            elif target_field == "Net Income" and extracted["Net Income"] == "Not found":
-                extracted["Net Income"] = value
+        # Pick the highest value for each field (simple fallback)
+        for (tag_name, _), val in values_by_tag.items():
+            field = TARGET_TAGS.get(tag_name)
+            if field and extracted[field] == "Not found":
+                extracted[field] = str(val)
 
         return jsonify(extracted)
 
