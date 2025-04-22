@@ -225,7 +225,7 @@ def upload_file():
             if kw.lower() in line.lower():
                 findings.append({"keyword": kw, "excerpt": line.strip()})
 
-        board_comp = []
+    board_comp = []
     known_names_pattern = re.compile(
         r"\b(Mary Dillon|Sonia Syngal|Darlene Nicosia|Tristan Walker|John Venhuizen|Ulice Payne|Virginia Drosos|Kimberly Underhill|Dona Young)\b",
         re.IGNORECASE
