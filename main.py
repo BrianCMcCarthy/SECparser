@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
+import fitz  # PyMuPDF
 
 app = Flask(__name__)
 
@@ -190,6 +191,47 @@ Strategic Flags:
             "ticker": ticker.upper(),
             "peers": peer_list
         }
+    })
+
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+@app.route("/upload-file", methods=["POST"])
+def upload_file():
+    if "file" not in request.files:
+        return jsonify({"error": "No file part in request"}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
+
+    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
+    file.save(filepath)
+
+    try:
+        doc = fitz.open(filepath)
+        full_text = "\n".join([page.get_text() for page in doc])
+        doc.close()
+    except Exception as e:
+        return jsonify({"error": f"Failed to process file: {str(e)}"}), 500
+
+    keywords = [
+        "Board of Directors", "Compensation Committee", "Shareholder", "Dividend",
+        "BOPIS", "Loyalty", "FLX Rewards", "Private Label", "Digital", "App", "Buyback",
+        "Ometria", "CDP", "Return Policy", "Omnichannel", "E-commerce"
+    ]
+
+    findings = []
+    for line in full_text.split("\n"):
+        for kw in keywords:
+            if kw.lower() in line.lower():
+                findings.append({"keyword": kw, "excerpt": line.strip()})
+
+    return jsonify({
+        "filename": file.filename,
+        "num_findings": len(findings),
+        "keywords_matched": list(set([f["keyword"] for f in findings])),
+        "excerpts": findings
     })
 
 if __name__ == "__main__":
