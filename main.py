@@ -213,29 +213,29 @@ def upload_file():
     except Exception as e:
         return jsonify({"error": f"Failed to process file: {str(e)}"}), 500
 
+    # Keywords to scan for
     keywords = [
         "Board of Directors", "Compensation Committee", "Shareholder", "Dividend",
         "BOPIS", "Loyalty", "FLX Rewards", "Private Label", "Digital", "App", "Buyback",
         "Ometria", "CDP", "Return Policy", "Omnichannel", "E-commerce"
     ]
 
+    # Extract keyword excerpts
     findings = []
     for line in full_text.split("\n"):
         for kw in keywords:
             if kw.lower() in line.lower():
                 findings.append({"keyword": kw, "excerpt": line.strip()})
 
+    # Extract compensation data using pattern logic
     board_comp = []
     money_pattern = re.compile(r"\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?")
-    comp_keywords = ["retainer", "compensation", "paid", "fees", "salary", "equity", "DSU"]
-
     lines = full_text.split("\n")
-    for i, line in enumerate(lines):
-        if money_pattern.search(line) and any(kw in line.lower() for kw in comp_keywords):
-            comp_val = money_pattern.search(line).group(0)
+    for line in lines:
+        if money_pattern.search(line):
             board_comp.append({
                 "Line": line.strip(),
-                "Reported Comp": comp_val
+                "Reported Comp": money_pattern.search(line).group(0)
             })
 
     return jsonify({
