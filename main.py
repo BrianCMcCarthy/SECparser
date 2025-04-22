@@ -21,7 +21,7 @@ TARGET_TAGS = {
 def get_latest_filing_url(ticker, form_type="10-K"):
     cik_url = f"https://www.sec.gov/files/company_tickers.json"
     headers = {
-        "User-Agent": "BrianSECParser/1.0 (your@email.com)"
+        "User-Agent": "BrianSECParser/1.0 (youremail@example.com)"
     }
     cik_data = requests.get(cik_url, headers=headers).json()
 
@@ -69,6 +69,8 @@ def parse_sec_filing():
         namespaces = {'ix': 'http://www.xbrl.org/2013/inlineXBRL'}
         tags = tree.xpath("//ix:nonFraction", namespaces=namespaces)
 
+        print(f"Found {len(tags)} ix:nonFraction tags")  # DEBUG
+
         values_by_tag = {}
         for tag in tags:
             name = tag.attrib.get("name", "").lower()
@@ -76,12 +78,13 @@ def parse_sec_filing():
             value = tag.text.strip() if tag.text else ""
             value = value.replace(",", "")
 
+            print(f"Tag: {name}, Context: {context}, Value: {value}")  # DEBUG
+
             if value.startswith("(") and value.endswith(")"):
                 value = "-" + value[1:-1]
 
             try:
                 float_val = float(value)
-                # Prioritize contexts that are likely consolidated and recent
                 if any(kw in context for kw in ["current", "year", "q4", "duration", "consolidated"]):
                     key = (name, context)
                     if name in TARGET_TAGS:
@@ -89,7 +92,6 @@ def parse_sec_filing():
             except:
                 continue
 
-        # Build result dictionary
         extracted = {
             "Filing URL": sec_url,
             "Revenue": "Not found",
@@ -98,7 +100,6 @@ def parse_sec_filing():
             "Net Income": "Not found"
         }
 
-        # Pick the highest value for each field (simple fallback)
         for (tag_name, _), val in values_by_tag.items():
             field = TARGET_TAGS.get(tag_name)
             if field and extracted[field] == "Not found":
@@ -111,7 +112,7 @@ def parse_sec_filing():
     except etree.XMLSyntaxError as e:
         return jsonify({"error": f"HTML parsing failed: {e}"}), 500
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"Unexpected error: {e}")  # DEBUG
         return jsonify({"error": str(e)}), 500
 
 @app.route("/analyze", methods=["GET"])
@@ -125,7 +126,6 @@ def analyze():
         return jsonify({"error": f"No 10-K filing found for {ticker}"}), 404
 
     try:
-        # Trick to reuse the /parse logic without rewriting it
         request.args = request.args.copy()
         request.args["url"] = filing_url
         return parse_sec_filing()
