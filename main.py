@@ -3,6 +3,37 @@ import requests
 from lxml import etree
 import re
 import os
+import yfinance as yf
+
+def get_financial_summary(ticker: str):
+    try:
+        stock = yf.Ticker(ticker)
+        fin = stock.financials
+        info = stock.info
+
+        summary = {
+            "Company": info.get("longName", ticker),
+            "Ticker": ticker.upper(),
+            "Revenue": None,
+            "Gross Profit": None,
+            "SG&A": None,
+            "Net Income": None
+        }
+
+        if not fin.empty:
+            if "Total Revenue" in fin.index:
+                summary["Revenue"] = int(fin.loc["Total Revenue"].iloc[0])
+            if "Gross Profit" in fin.index:
+                summary["Gross Profit"] = int(fin.loc["Gross Profit"].iloc[0])
+            if "Selling General Administrative" in fin.index:
+                summary["SG&A"] = int(fin.loc["Selling General Administrative"].iloc[0])
+            if "Net Income" in fin.index:
+                summary["Net Income"] = int(fin.loc["Net Income"].iloc[0])
+
+        return summary
+
+    except Exception as e:
+        return {"error": str(e)}
 
 app = Flask(__name__)
 
