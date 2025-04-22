@@ -1,8 +1,31 @@
+from flask import Flask, request, jsonify
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import os
+
+app = Flask(__name__)
+
+def extract_latest(series, fallback=None):
+    try:
+        return int(series.dropna().iloc[0])
+    except:
+        return fallback
+
 def safe_extract(df, labels):
     for label in labels:
         if label in df.index:
             return extract_latest(df.loc[label])
     return None
+
+def calculate_trends(df, line_item):
+    if line_item not in df.index:
+        return None
+    values = df.loc[line_item].dropna().astype(float)
+    if len(values) < 2:
+        return None
+    cagr = ((values[0] / values[-1]) ** (1 / (len(values) - 1)) - 1) * 100
+    return round(cagr, 2)
 
 def analyze_company(ticker):
     stock = yf.Ticker(ticker)
@@ -121,3 +144,28 @@ def compare_to_peers(main_summary, peer_summaries):
         insights.append(f"{main_summary['Ticker']} is buying back shares (${main_summary['Share Buybacks']:,}) despite slow revenue growth ({main_summary['Revenue CAGR (%)']}%).")
 
     return comparison, insights
+
+@app.route("/analyze-activist", methods=["GET"])
+def analyze_activist():
+    ticker = request.args.get("ticker")
+    peers = request.args.get("peers", "")
+    peer_list = [p.strip().upper() for p in peers.split(",") if p.strip()]
+
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    main_summary = analyze_company(ticker.upper())
+    peer_summaries = [analyze_company(p) for p in peer_list]
+
+    comparison, insights = compare_to_peers(main_summary, peer_summaries)
+
+    result = {
+        "Target Summary": main_summary,
+        "Peer Comparison": comparison,
+        "Strategic Insights": insights
+    }
+    return jsonify(result)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
