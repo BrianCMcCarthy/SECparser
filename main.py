@@ -4,8 +4,11 @@ import pandas as pd
 import numpy as np
 import os
 import fitz  # PyMuPDF
+import re
 
 app = Flask(__name__)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def extract_latest(series, fallback=None):
     try:
@@ -117,7 +120,6 @@ def generate_brief():
     main_summary = analyze_company(ticker.upper())
     peer_summaries = [analyze_company(p) for p in peer_list]
 
-    # Compile insight flags
     insights = []
     main_rev = main_summary["Revenue"]["value"] or 1
     for peer in peer_summaries:
@@ -133,7 +135,6 @@ def generate_brief():
            peer["FCF Margin (%)"]["value"] > main_summary["FCF Margin (%)"]["value"] + 2:
             insights.append(f"{main_summary['Ticker']} FCF margin ({main_summary['FCF Margin (%)']['value']}%) lags {peer['Ticker']} at {peer['FCF Margin (%)']['value']}%. [[SOURCE: {main_summary['FCF Margin (%)']['source']}]]")
 
-    # Build the prompt
     exec_summary = (
         f"As an activist investor evaluating {main_summary['Company']} ({ticker.upper()}), "
         f"your goal is to identify underperformance, strategic misalignment, governance risk, and capital inefficiency. "
@@ -193,9 +194,6 @@ Strategic Flags:
         }
     })
 
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 @app.route("/upload-file", methods=["POST"])
 def upload_file():
     if "file" not in request.files:
@@ -227,33 +225,32 @@ def upload_file():
             if kw.lower() in line.lower():
                 findings.append({"keyword": kw, "excerpt": line.strip()})
 
-    # Try to extract board comp table from full text
-board_comp = []
-comp_block_pattern = re.compile(r"(?i)(name|director).{0,20}(total|compensation|fees|paid)")
-money_pattern = re.compile(r"\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?")
-name_pattern = re.compile(r"([A-Z][a-z]+\\s[A-Z][a-z]+)")
+    board_comp = []
+    comp_block_pattern = re.compile(r"(?i)(name|director).{0,20}(total|compensation|fees|paid)")
+    money_pattern = re.compile(r"\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?")
+    name_pattern = re.compile(r"([A-Z][a-z]+\s[A-Z][a-z]+)")
 
-lines = full_text.split("\n")
-for i, line in enumerate(lines):
-    if comp_block_pattern.search(line):
-        for j in range(i + 1, min(i + 10, len(lines))):
-            name_match = name_pattern.findall(lines[j])
-            comp_match = money_pattern.findall(lines[j])
-            if name_match and comp_match:
-                board_comp.append({
-                    "Name": name_match[0],
-                    "Reported Comp": comp_match[0],
-                    "Line": lines[j].strip()
-                })
+    lines = full_text.split("\n")
+    for i, line in enumerate(lines):
+        if comp_block_pattern.search(line):
+            for j in range(i + 1, min(i + 10, len(lines))):
+                name_match = name_pattern.findall(lines[j])
+                comp_match = money_pattern.findall(lines[j])
+                if name_match and comp_match:
+                    board_comp.append({
+                        "Name": name_match[0],
+                        "Reported Comp": comp_match[0],
+                        "Line": lines[j].strip()
+                    })
 
-return jsonify({
-    "filename": file.filename,
-    "num_findings": len(findings),
-    "keywords_matched": list(set([f["keyword"] for f in findings])),
-    "excerpts": findings,
-    "board_comp_table": board_comp,
-    "num_comp_entries": len(board_comp)
-})
+    return jsonify({
+        "filename": file.filename,
+        "num_findings": len(findings),
+        "keywords_matched": list(set([f["keyword"] for f in findings])),
+        "excerpts": findings,
+        "board_comp_table": board_comp,
+        "num_comp_entries": len(board_comp)
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
