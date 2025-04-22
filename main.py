@@ -225,23 +225,23 @@ def upload_file():
             if kw.lower() in line.lower():
                 findings.append({"keyword": kw, "excerpt": line.strip()})
 
-    board_comp = []
-    comp_block_pattern = re.compile(r"(?i)(name|director).{0,20}(total|compensation|fees|paid)")
+        board_comp = []
+    known_names_pattern = re.compile(
+        r"\b(Mary Dillon|Sonia Syngal|Darlene Nicosia|Tristan Walker|John Venhuizen|Ulice Payne|Virginia Drosos|Kimberly Underhill|Dona Young)\b",
+        re.IGNORECASE
+    )
     money_pattern = re.compile(r"\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?")
-    name_pattern = re.compile(r"([A-Z][a-z]+\s[A-Z][a-z]+)")
 
     lines = full_text.split("\n")
     for i, line in enumerate(lines):
-        if comp_block_pattern.search(line):
-            for j in range(i + 1, min(i + 10, len(lines))):
-                name_match = name_pattern.findall(lines[j])
-                comp_match = money_pattern.findall(lines[j])
-                if name_match and comp_match:
-                    board_comp.append({
-                        "Name": name_match[0],
-                        "Reported Comp": comp_match[0],
-                        "Line": lines[j].strip()
-                    })
+        if known_names_pattern.search(line) and money_pattern.search(line):
+            name = known_names_pattern.search(line).group(0)
+            comp = money_pattern.search(line).group(0)
+            board_comp.append({
+                "Name": name,
+                "Reported Comp": comp,
+                "Line": line.strip()
+            })
 
     return jsonify({
         "filename": file.filename,
