@@ -3,3 +3,10 @@ requests
 lxml
 gunicorn
 yfinance
+flask
+requests
+lxml
+gunicorn
+yfinance
+pandas
+numpy
