@@ -1,175 +1,141 @@
 from flask import Flask, request, jsonify
-import requests
-from lxml import etree
-import re
-import os
 import yfinance as yf
-
-def get_financial_summary(ticker: str):
-    try:
-        stock = yf.Ticker(ticker)
-        fin = stock.financials
-        info = stock.info
-
-        summary = {
-            "Company": info.get("longName", ticker),
-            "Ticker": ticker.upper(),
-            "Revenue": None,
-            "Gross Profit": None,
-            "SG&A": None,
-            "Net Income": None
-        }
-
-        if not fin.empty:
-            if "Total Revenue" in fin.index:
-                summary["Revenue"] = int(fin.loc["Total Revenue"].iloc[0])
-            if "Gross Profit" in fin.index:
-                summary["Gross Profit"] = int(fin.loc["Gross Profit"].iloc[0])
-            if "Selling General Administrative" in fin.index:
-                summary["SG&A"] = int(fin.loc["Selling General Administrative"].iloc[0])
-            if "Net Income" in fin.index:
-                summary["Net Income"] = int(fin.loc["Net Income"].iloc[0])
-
-        return summary
-
-    except Exception as e:
-        return {"error": str(e)}
+import pandas as pd
+import numpy as np
+import os
 
 app = Flask(__name__)
 
-TARGET_TAGS = {
-    "us-gaap:revenues": "Revenue",
-    "us-gaap:salesrevenuenet": "Revenue",
-    "us-gaap:grossprofit": "Gross Profit",
-    "us-gaap:sellinggeneralandadministrativeexpense": "SG&A",
-    "us-gaap:sellingandmarketingexpense": "SG&A_Component",
-    "us-gaap:generalandadministrativeexpense": "SG&A_Component",
-    "us-gaap:netincomeloss": "Net Income",
-    "us-gaap:profitloss": "Net Income",
-    "us-gaap:incomelossfromcontinuingoperationsbeforeincometaxesextraordinaryitemsnoncontrollinginterest": "Pretax Income"
-}
+def fetch_all_data(ticker):
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    fin = stock.financials
+    bal = stock.balance_sheet
+    cf = stock.cashflow
+    return stock, info, fin, bal, cf
 
-def get_latest_filing_url(ticker, form_type="10-K"):
-    cik_url = f"https://www.sec.gov/files/company_tickers.json"
-    headers = {
-        "User-Agent": "BrianSECParser/1.0 (youremail@example.com)"
-    }
-    cik_data = requests.get(cik_url, headers=headers).json()
+def extract_latest(series, fallback=None):
+    try:
+        return int(series.dropna().iloc[0])
+    except:
+        return fallback
 
-    ticker_upper = ticker.upper()
-    matched = [entry for entry in cik_data.values() if entry["ticker"] == ticker_upper]
-    if not matched:
+def calculate_trends(df, line_item):
+    if line_item not in df.index:
         return None
+    values = df.loc[line_item].dropna().astype(float)
+    if len(values) < 2:
+        return None
+    cagr = ((values[0] / values[-1]) ** (1 / (len(values) - 1)) - 1) * 100
+    return round(cagr, 2)
 
-    cik_str = str(matched[0]["cik_str"]).zfill(10)
+def analyze_company(ticker):
+    stock, info, fin, bal, cf = fetch_all_data(ticker)
+    name = info.get("longName", ticker)
+    summary = {"Company": name, "Ticker": ticker.upper()}
 
-    filings_url = f"https://data.sec.gov/submissions/CIK{cik_str}.json"
-    filings_resp = requests.get(filings_url, headers=headers).json()
+    # Income statement
+    revenue = extract_latest(fin.loc["Total Revenue"]) if "Total Revenue" in fin.index else None
+    gross = extract_latest(fin.loc["Gross Profit"]) if "Gross Profit" in fin.index else None
+    sga = extract_latest(fin.loc["Selling General Administrative"]) if "Selling General Administrative" in fin.index else extract_latest(fin.loc["Operating Expenses"]) if "Operating Expenses" in fin.index else None
+    net = extract_latest(fin.loc["Net Income"]) if "Net Income" in fin.index else None
 
-    recent_filings = filings_resp.get("filings", {}).get("recent", {})
-    accession_numbers = recent_filings.get("accessionNumber", [])
-    forms = recent_filings.get("form", [])
-    doc_names = recent_filings.get("primaryDocument", [])
+    summary["Revenue"] = revenue
+    summary["Gross Profit"] = gross
+    summary["SG&A"] = sga
+    summary["Net Income"] = net
 
-    for form, acc_num, doc_name in zip(forms, accession_numbers, doc_names):
-        if form == form_type:
-            acc_num_clean = acc_num.replace("-", "")
-            doc_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik_str)}/{acc_num_clean}/{doc_name}"
-            return doc_url
+    if revenue:
+        summary["Gross Margin (%)"] = round(gross / revenue * 100, 2) if gross else None
+        summary["Net Income Margin (%)"] = round(net / revenue * 100, 2) if net else None
+        summary["SG&A as % of Revenue"] = round(sga / revenue * 100, 2) if sga else None
 
-    return None
+    # Balance Sheet
+    cash = extract_latest(bal.loc["Cash"]) if "Cash" in bal.index else None
+    debt = extract_latest(bal.loc["Long Term Debt"]) if "Long Term Debt" in bal.index else None
+    equity = extract_latest(bal.loc["Total Stockholder Equity"]) if "Total Stockholder Equity" in bal.index else None
 
-@app.route("/parse", methods=["GET"])
-def parse_sec_filing():
-    sec_url = request.args.get("url")
-    if not sec_url:
-        return jsonify({"error": "Missing SEC filing URL"}), 400
+    summary["Cash"] = cash
+    summary["Total Debt"] = debt
+    summary["Net Debt"] = debt - cash if debt is not None and cash is not None else None
+    summary["Debt-to-Equity Ratio"] = round(debt / equity, 2) if debt and equity else None
 
-    try:
-        headers = {
-            "User-Agent": "BrianSECParser/1.0 (youremail@example.com)",
-            "Accept-Encoding": "gzip, deflate",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Connection": "keep-alive"
-        }
+    # Cash Flow
+    ocf = extract_latest(cf.loc["Total Cash From Operating Activities"]) if "Total Cash From Operating Activities" in cf.index else None
+    capex = extract_latest(cf.loc["Capital Expenditures"]) if "Capital Expenditures" in cf.index else None
+    buybacks = extract_latest(cf.loc["Repurchase Of Stock"]) if "Repurchase Of Stock" in cf.index else None
 
-        resp = requests.get(sec_url, headers=headers, timeout=20)
-        resp.raise_for_status()
-        tree = etree.HTML(resp.content)
+    fcf = ocf + capex if ocf and capex else None  # CapEx is negative
 
-        namespaces = {'ix': 'http://www.xbrl.org/2013/inlineXBRL'}
-        tags = tree.xpath("//ix:nonFraction", namespaces=namespaces)
+    summary["Operating Cash Flow"] = ocf
+    summary["CapEx"] = capex
+    summary["Free Cash Flow"] = fcf
+    summary["FCF Margin (%)"] = round(fcf / revenue * 100, 2) if fcf and revenue else None
+    summary["Share Buybacks"] = buybacks
 
-        print(f"Found {len(tags)} ix:nonFraction tags")  # DEBUG
+    # Trends
+    summary["Revenue CAGR (%)"] = calculate_trends(fin, "Total Revenue")
+    summary["Net Income CAGR (%)"] = calculate_trends(fin, "Net Income")
+    summary["SG&A CAGR (%)"] = calculate_trends(fin, "Selling General Administrative")
 
-        values_by_tag = {}
-        for tag in tags:
-            name = tag.attrib.get("name", "").lower()
-            context = tag.attrib.get("contextRef", "").lower()
-            value = tag.text.strip() if tag.text else ""
-            value = value.replace(",", "")
+    return summary
 
-            print(f"Tag: {name}, Context: {context}, Value: {value}")  # DEBUG
+def compare_to_peers(main_summary, peer_summaries):
+    comparison = []
+    insights = []
+    main_rev = main_summary.get("Revenue", 1)
 
-            if value.startswith("(") and value.endswith(")"):
-                value = "-" + value[1:-1]
+    for peer in peer_summaries:
+        if not peer: continue
+        comparison.append({
+            "Ticker": peer["Ticker"],
+            "Revenue": peer.get("Revenue"),
+            "Gross Margin (%)": peer.get("Gross Margin (%)"),
+            "SG&A as % of Revenue": peer.get("SG&A as % of Revenue"),
+            "Net Income Margin (%)": peer.get("Net Income Margin (%)"),
+            "FCF Margin (%)": peer.get("FCF Margin (%)"),
+            "Debt-to-Equity Ratio": peer.get("Debt-to-Equity Ratio")
+        })
 
-            try:
-                float_val = float(value)
-                if any(kw in context for kw in ["current", "year", "q4", "duration", "consolidated"]):
-                    key = (name, context)
-                    if name in TARGET_TAGS:
-                        values_by_tag[key] = float_val
-            except:
-                continue
+        # Benchmarks vs main
+        if peer.get("Gross Margin (%)") and main_summary.get("Gross Margin (%)") and peer["Gross Margin (%)"] > main_summary["Gross Margin (%)"] + 2:
+            insights.append(f"{main_summary['Ticker']}'s gross margin ({main_summary['Gross Margin (%)']}%) is trailing {peer['Ticker']}'s {peer['Gross Margin (%)']}%.")
+        if peer.get("SG&A as % of Revenue") and main_summary.get("SG&A as % of Revenue") and peer["SG&A as % of Revenue"] < main_summary["SG&A as % of Revenue"] - 2:
+            insights.append(f"{main_summary['Ticker']}'s SG&A is {main_summary['SG&A as % of Revenue']}% of revenue — higher than {peer['Ticker']} at {peer['SG&A as % of Revenue']}%.")
+        if peer.get("FCF Margin (%)") and main_summary.get("FCF Margin (%)") and peer["FCF Margin (%)"] > main_summary["FCF Margin (%)"] + 3:
+            insights.append(f"{main_summary['Ticker']}'s FCF margin ({main_summary['FCF Margin (%)']}%) lags behind {peer['Ticker']} at {peer['FCF Margin (%)']}%.")
 
-        extracted = {
-            "Filing URL": sec_url,
-            "Revenue": "Not found",
-            "Gross Profit": "Not found",
-            "SG&A": "Not found",
-            "Net Income": "Not found"
-        }
+    # Capital structure insights
+    if main_summary.get("Cash") and main_summary.get("Total Debt"):
+        if main_summary["Cash"] > main_summary["Total Debt"]:
+            insights.append(f"{main_summary['Ticker']} is over-capitalized with ${main_summary['Cash']:,} in cash and less debt — suggesting potential for buybacks or dividends.")
+        elif main_summary["Net Debt"] and main_summary["Net Debt"] / main_rev > 0.3:
+            insights.append(f"{main_summary['Ticker']}'s net debt is {round(main_summary['Net Debt']/main_rev*100,2)}% of revenue — potential leverage concern.")
 
-        for (tag_name, _), val in values_by_tag.items():
-            field = TARGET_TAGS.get(tag_name)
-            if field and extracted[field] == "Not found":
-                extracted[field] = str(val)
+    if main_summary.get("Share Buybacks") and main_summary.get("Revenue CAGR (%)") is not None and main_summary["Revenue CAGR (%)"] < 2:
+        insights.append(f"{main_summary['Ticker']} is returning capital to shareholders via buybacks (${main_summary['Share Buybacks']:,}) despite sluggish revenue growth ({main_summary['Revenue CAGR (%)']}%).")
 
-        return jsonify(extracted)
+    return comparison, insights
 
-    except requests.exceptions.RequestException as e:
-        return jsonify({"error": f"Request failed: {e}"}), 500
-    except etree.XMLSyntaxError as e:
-        return jsonify({"error": f"HTML parsing failed: {e}"}), 500
-    except Exception as e:
-        print(f"Unexpected error: {e}")  # DEBUG
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/analyze", methods=["GET"])
-def analyze():
+@app.route("/analyze-activist", methods=["GET"])
+def analyze_activist():
     ticker = request.args.get("ticker")
+    peers = request.args.get("peers", "")
+    peer_list = [p.strip().upper() for p in peers.split(",") if p.strip()]
+
     if not ticker:
-        return jsonify({"error": "Missing ticker"}), 400
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
 
-    filing_url = get_latest_filing_url(ticker)
-    if not filing_url:
-        return jsonify({"error": f"No 10-K filing found for {ticker}"}), 404
+    main_summary = analyze_company(ticker.upper())
+    peer_summaries = [analyze_company(p) for p in peer_list]
 
-    try:
-        request.args = request.args.copy()
-        request.args["url"] = filing_url
-        return parse_sec_filing()
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    comparison, insights = compare_to_peers(main_summary, peer_summaries)
 
-@app.route("/analyze-financials", methods=["GET"])
-def analyze_financials():
-    ticker = request.args.get("ticker")
-    if not ticker:
-        return jsonify({"error": "Missing ticker symbol"}), 400
-
-    result = get_financial_summary(ticker)
+    result = {
+        "Target Summary": main_summary,
+        "Peer Comparison": comparison,
+        "Strategic Insights": insights
+    }
     return jsonify(result)
 
 if __name__ == "__main__":
