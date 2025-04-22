@@ -18,6 +18,37 @@ TARGET_TAGS = {
     "us-gaap:incomelossfromcontinuingoperationsbeforeincometaxesextraordinaryitemsnoncontrollinginterest": "Pretax Income"
 }
 
+# Add this below TARGET_TAGS, before your route definitions
+def get_latest_filing_url(ticker, form_type="10-K"):
+    cik_url = f"https://www.sec.gov/files/company_tickers.json"
+    headers = {
+        "User-Agent": "BrianSECParser/1.0 (your@email.com)"
+    }
+    cik_data = requests.get(cik_url, headers=headers).json()
+
+    ticker_upper = ticker.upper()
+    matched = [entry for entry in cik_data.values() if entry["ticker"] == ticker_upper]
+    if not matched:
+        return None
+
+    cik_str = str(matched[0]["cik_str"]).zfill(10)
+
+    filings_url = f"https://data.sec.gov/submissions/CIK{cik_str}.json"
+    filings_resp = requests.get(filings_url, headers=headers).json()
+
+    recent_filings = filings_resp.get("filings", {}).get("recent", {})
+    accession_numbers = recent_filings.get("accessionNumber", [])
+    forms = recent_filings.get("form", [])
+    doc_names = recent_filings.get("primaryDocument", [])
+
+    for form, acc_num, doc_name in zip(forms, accession_numbers, doc_names):
+        if form == form_type:
+            acc_num_clean = acc_num.replace("-", "")
+            doc_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik_str)}/{acc_num_clean}/{doc_name}"
+            return doc_url
+
+    return None
+
 @app.route("/parse", methods=["GET"])
 def parse_sec_filing():
     sec_url = request.args.get("url")
@@ -83,6 +114,24 @@ def parse_sec_filing():
         return jsonify({"error": f"HTML parsing failed: {e}"}), 500
     except Exception as e:
         print(f"Unexpected error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/analyze", methods=["GET"])
+def analyze():
+    ticker = request.args.get("ticker")
+    if not ticker:
+        return jsonify({"error": "Missing ticker"}), 400
+
+    filing_url = get_latest_filing_url(ticker)
+    if not filing_url:
+        return jsonify({"error": f"No 10-K filing found for {ticker}"}), 404
+
+    try:
+        # Trick to reuse the /parse logic without rewriting it
+        request.args = request.args.copy()
+        request.args["url"] = filing_url
+        return parse_sec_filing()
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
