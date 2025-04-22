@@ -26,7 +26,7 @@ def parse_sec_filing():
 
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "Mozilla/5.0 (compatible; SECParserBot/1.0; brian.c.mccarthy@gmail.com)",
             "Accept-Encoding": "gzip, deflate",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Connection": "keep-alive"
