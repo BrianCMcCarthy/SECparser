@@ -52,7 +52,6 @@ def analyze_company(ticker):
         summary["Net Income Margin (%)"] = round(summary["Net Income"] / rev * 100, 2) if summary["Net Income"] else None
         summary["SG&A as % of Revenue"] = round(summary["SG&A"] / rev * 100, 2) if summary["SG&A"] else None
 
-    # Balance Sheet
     summary["Cash"] = safe_extract(bal, ["Cash", "Cash And Cash Equivalents"]) or safe_extract(qbal, ["Cash", "Cash And Cash Equivalents"])
     summary["Total Debt"] = safe_extract(bal, ["Long Term Debt", "Total Debt"]) or safe_extract(qbal, ["Long Term Debt", "Total Debt"])
     equity = safe_extract(bal, ["Total Stockholder Equity"]) or safe_extract(qbal, ["Total Stockholder Equity"])
@@ -67,7 +66,6 @@ def analyze_company(ticker):
     else:
         summary["Debt-to-Equity Ratio"] = "Data not available"
 
-    # Cash Flow
     ocf = safe_extract(cf, ["Total Cash From Operating Activities"]) or safe_extract(qcf, ["Total Cash From Operating Activities"])
     capex = safe_extract(cf, ["Capital Expenditures"]) or safe_extract(qcf, ["Capital Expenditures"])
     buybacks = safe_extract(cf, ["Repurchase Of Stock"]) or safe_extract(qcf, ["Repurchase Of Stock"])
@@ -77,7 +75,7 @@ def analyze_company(ticker):
     summary["Share Buybacks"] = buybacks or "Data not available"
 
     if ocf and capex:
-        fcf = ocf + capex  # CapEx is negative
+        fcf = ocf + capex
         summary["Free Cash Flow"] = fcf
         summary["FCF Margin (%)"] = round(fcf / rev * 100, 2) if rev else "Data not available"
     else:
@@ -88,7 +86,6 @@ def analyze_company(ticker):
     summary["Net Income CAGR (%)"] = calculate_trends(fin, "Net Income")
     summary["SG&A CAGR (%)"] = calculate_trends(fin, "Selling General Administrative")
 
-    # Replace None with cleaner fallback
     for k, v in summary.items():
         if v is None:
             summary[k] = "Data not available"
@@ -156,7 +153,6 @@ def analyze_activist():
 
     main_summary = analyze_company(ticker.upper())
     peer_summaries = [analyze_company(p) for p in peer_list]
-
     comparison, insights = compare_to_peers(main_summary, peer_summaries)
 
     result = {
@@ -165,6 +161,78 @@ def analyze_activist():
         "Strategic Insights": insights
     }
     return jsonify(result)
+
+@app.route("/generate-brief", methods=["GET"])
+def generate_brief():
+    ticker = request.args.get("ticker")
+    peers = request.args.get("peers", "")
+    peer_list = [p.strip().upper() for p in peers.split(",") if p.strip()]
+
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    main_summary = analyze_company(ticker.upper())
+    peer_summaries = [analyze_company(p) for p in peer_list]
+    comparison, insights = compare_to_peers(main_summary, peer_summaries)
+
+    exec_summary = (
+        f"As an activist investor evaluating {main_summary['Company']} ({ticker.upper()}), "
+        f"your goal is to identify underperformance, strategic misalignment, governance risk, and capital inefficiency. "
+        f"You are comparing against: {', '.join(peer_list)}.\n\n"
+        f"Start with a narrative-style Executive Summary highlighting:\n"
+        "- Core performance issues\n"
+        "- Peer benchmarking gaps\n"
+        "- Leverage or balance sheet flags\n"
+        "- Capital allocation behavior (e.g., buybacks vs growth)\n"
+        "- Strategic or governance vulnerabilities\n\n"
+        f"Use the data below as inputs:"
+    )
+
+    prompt = f"""
+## EXECUTIVE SUMMARY
+{exec_summary}
+
+## FINANCIAL HIGHLIGHTS
+Target Company:
+{main_summary}
+
+Peer Comparison:
+{comparison}
+
+Strategic Flags:
+{insights}
+
+## FORMAT REQUIREMENTS
+- Investor-grade tone (not conversational)
+- Double-spaced text, structured for Word export
+- Bold or italicize key inflection points
+- Use citations when referencing uploaded 10-K or DEF 14A data (if available)
+- Label assumptions or inferred data clearly
+- Structure output using these sections:
+  1. Executive Summary
+  2. Financial Forensics
+  3. Capital Allocation Review
+  4. Strategic Positioning
+  5. Operational Execution
+  6. Governance & Board Review
+  7. Brand & Customer Health
+  8. Risk Heatmap
+  9. Activist Playbook (5 actions)
+  10. Appendix (optional peer stack, comps, models)
+    """.strip()
+
+    return jsonify({
+        "prompt": prompt,
+        "context_data": {
+            "Target Summary": main_summary,
+            "Peer Comparison": comparison
+        },
+        "insight_summary": insights,
+        "metadata": {
+            "ticker": ticker.upper(),
+            "peers": peer_list
+        }
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
