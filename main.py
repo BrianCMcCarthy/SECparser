@@ -331,31 +331,35 @@ def generate_charts():
 
     return jsonify(charts)
 
+try:
+        market_cap = info.get("marketCap", None)
+        if market_cap and fcf and fcf != 0:
+            irr_table = []
+            hold_period = 3
+            for multiple in range(8, 13):
+                exit_ev = multiple * fcf
+                entry_ev = market_cap + (debt or 0) - (cash or 0)
+                irr = ((exit_ev / entry_ev) ** (1 / hold_period) - 1) * 100 if entry_ev > 0 else None
+                irr_table.append({"Exit EV/FCF": multiple, "IRR (%)": round(irr, 2) if irr else None})
+            summary["IRR Table"] = irr_table
+    except Exception as e:
+        summary["IRR Table"] = f"Error calculating IRR: {str(e)}"
+
+    return summary
+
 @app.route("/generate-irr", methods=["GET"])
 def generate_irr():
     ticker = request.args.get("ticker")
     if not ticker:
         return jsonify({"error": "Missing 'ticker' parameter"}), 400
+    data = analyze_company(ticker)
+    if "error" in data:
+        return jsonify(data), 500
+    return jsonify({"ticker": ticker, "irr_table": data.get("IRR Table", [])})
 
-    summary = analyze_company(ticker)
-    if "error" in summary:
-        return jsonify(summary), 500
-
-    fcf = summary["Free Cash Flow"]["value"]
-    net_debt = summary["Net Debt"]["value"]
-    market_cap = summary["Market Cap"]["value"]
-
-    if not all([fcf, market_cap]) or fcf <= 0:
-        return jsonify({"error": "Invalid or missing financial data for IRR calculation."}), 400
-
-    irr_table = []
-    entry_price = market_cap + (net_debt or 0)
-    for exit_multiple in [8, 9, 10, 11, 12]:
-        exit_value = exit_multiple * fcf
-        irr = ((exit_value - entry_price) / entry_price) ** (1/3) - 1
-        irr_table.append({"EV/FCF Exit Multiple": exit_multiple, "Implied IRR (%)": round(irr * 100, 2)})
-
-    return jsonify({"IRR Table": irr_table, "Entry Price": entry_price, "FCF": fcf, "Net Debt": net_debt})
+@app.route("/uploads/<path:filename>", methods=["GET"])
+def download_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
 
 # === DOCX GENERATION ===
 @app.route("/generate-docx", methods=["GET"])
