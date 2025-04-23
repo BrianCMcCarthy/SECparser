@@ -44,8 +44,12 @@ def label_source(value, source):
     return {"value": value, "source": source if value is not None else "Missing"}
 
 def analyze_company(ticker):
-    stock = yf.Ticker(ticker)
-    info = stock.info
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info or {}
+    except Exception as e:
+        print(f"Yahoo Finance API error for {ticker}: {e}")
+        return {"error": f"Yahoo Finance failed for {ticker}: {str(e)}"}
     name = info.get("longName", ticker)
     fin = stock.financials
     bal = stock.balance_sheet
