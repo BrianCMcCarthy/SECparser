@@ -392,6 +392,12 @@ def generate_docx():
 
     return jsonify({"doc_path": file_path})
 
+from flask import send_from_directory
+
+@app.route("/uploads/<path:filename>", methods=["GET"])
+def download_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
