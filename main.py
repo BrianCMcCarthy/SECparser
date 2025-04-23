@@ -331,7 +331,7 @@ def generate_charts():
 
     return jsonify(charts)
 
-try:
+ try:
         market_cap = info.get("marketCap", None)
         if market_cap and fcf and fcf != 0:
             irr_table = []
@@ -360,6 +360,11 @@ def generate_irr():
 @app.route("/uploads/<path:filename>", methods=["GET"])
 def download_file(filename):
     return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
 
 # === DOCX GENERATION ===
 @app.route("/generate-docx", methods=["GET"])
