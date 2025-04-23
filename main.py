@@ -5,6 +5,7 @@ import numpy as np
 import os
 import fitz  # PyMuPDF
 import re
+from typing import List, Dict
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
@@ -213,39 +214,47 @@ def upload_file():
     except Exception as e:
         return jsonify({"error": f"Failed to process file: {str(e)}"}), 500
 
-    # Keywords to scan for
     keywords = [
         "Board of Directors", "Compensation Committee", "Shareholder", "Dividend",
         "BOPIS", "Loyalty", "FLX Rewards", "Private Label", "Digital", "App", "Buyback",
         "Ometria", "CDP", "Return Policy", "Omnichannel", "E-commerce"
     ]
 
-    # Extract keyword excerpts
-    findings = []
+    excerpts = []
     for line in full_text.split("\n"):
         for kw in keywords:
             if kw.lower() in line.lower():
-                findings.append({"keyword": kw, "excerpt": line.strip()})
+                excerpts.append({"keyword": kw, "excerpt": line.strip()})
 
-    # Extract compensation data using pattern logic
-    board_comp = []
-    money_pattern = re.compile(r"\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?")
-    lines = full_text.split("\n")
-    for line in lines:
-        if money_pattern.search(line):
-            board_comp.append({
-                "Line": line.strip(),
-                "Reported Comp": money_pattern.search(line).group(0)
-            })
+    board_comp_table = extract_board_comp_table(full_text)
 
     return jsonify({
         "filename": file.filename,
-        "num_findings": len(findings),
-        "keywords_matched": list(set([f["keyword"] for f in findings])),
-        "excerpts": findings,
-        "board_comp_table": board_comp,
-        "num_comp_entries": len(board_comp)
+        "excerpts": excerpts,
+        "board_comp_table": board_comp_table,
+        "keywords_matched": list(set([e["keyword"] for e in excerpts])),
+        "num_findings": len(excerpts),
+        "num_comp_entries": len(board_comp_table)
     })
+
+def extract_board_comp_table(text: str) -> List[Dict[str, str]]:
+    comp_entries = []
+    pattern = r"(?i)(?:[\$€¥£]\s?[\d{1,3},]*\d{1,3}(?:\.\d{1,2})?)"
+    lines = text.split("\n")
+    for line in lines:
+        matches = re.findall(pattern, line)
+        for match in matches:
+            normalized = match.replace(",", "").replace(" ", "")
+            try:
+                value = float(re.sub(r"[^\d.]", "", normalized))
+                if value >= 1 and value <= 20000000:
+                    comp_entries.append({
+                        "Line": line.strip(),
+                        "Reported Comp": f"${int(value) if value.is_integer() else round(value, 2)}"
+                    })
+            except:
+                continue
+    return comp_entries
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
