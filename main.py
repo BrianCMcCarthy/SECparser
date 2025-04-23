@@ -7,7 +7,7 @@ import fitz  # PyMuPDF
 import re
 from typing import List, Dict
 import matplotlib
-matplotlib.use('Agg') 
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import io
 import base64
@@ -279,35 +279,39 @@ def generate_charts():
         series = series.dropna().astype(float)
         if series.empty:
             return None
-        series.plot(kind="bar", ax=ax)
+        series[::-1].plot(kind="bar", ax=ax)
         ax.set_title(title)
         buf = io.BytesIO()
         plt.tight_layout()
         plt.savefig(buf, format="png")
         plt.close(fig)
         buf.seek(0)
-        return base64.b64encode(buf.read()).decode("utf-8")
+        return "data:image/png;base64," + base64.b64encode(buf.read()).decode("utf-8")
 
     chart_targets = {
-        "SG&A": ["Selling General Administrative", "Operating Expenses"],
+        "SG&A": ["Selling General Administrative", "Operating Expenses", "Total Operating Expenses"],
         "Net Income": ["Net Income"],
-        "Long Term Debt": ["Long Term Debt"],
-        "Share Buybacks": ["Repurchase Of Stock"]
+        "Long Term Debt": ["Long Term Debt", "Total Debt"],
+        "Share Buybacks": ["Repurchase Of Stock", "Purchase Of Stock"]
     }
 
     for label, options in chart_targets.items():
+        encoded = None
         for key in options:
+            source = None
             if key in fin.index:
-                encoded = plot_and_encode(fin.loc[key], label)
+                source = fin
             elif key in cf.index:
-                encoded = plot_and_encode(cf.loc[key], label)
+                source = cf
             elif key in bal.index:
-                encoded = plot_and_encode(bal.loc[key], label)
-            else:
-                continue
-            if encoded:
-                charts[label] = encoded
-                break
+                source = bal
+
+            if source is not None:
+                encoded = plot_and_encode(source.loc[key], f"{label} Over Time")
+                if encoded:
+                    break
+        if encoded:
+            charts[label] = encoded
 
     return jsonify(charts)
 
