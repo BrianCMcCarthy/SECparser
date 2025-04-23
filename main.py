@@ -18,6 +18,7 @@ app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# === Analysis & Helper Functions ===
 def extract_latest(series, fallback=None):
     try:
         return int(series.dropna().iloc[0])
@@ -317,6 +318,7 @@ def generate_charts():
 
     return jsonify(charts)
 
+# === DOCX GENERATION ===
 @app.route("/generate-docx", methods=["GET"])
 def generate_docx():
     ticker = request.args.get("ticker")
@@ -344,12 +346,16 @@ def generate_docx():
 
     document = Document()
     document.add_heading(f"Activist Report: {ticker.upper()}", 0)
-    
+
     # Section: Financial Summary
     summary = analyze_company(ticker)
     document.add_heading("Financial Highlights", level=1)
-    for key, val in summary.items():
-        document.add_paragraph(f"{key}: {val['value']} [{val['source']}]")
+    for key in summary:
+        value_entry = summary[key]
+        if isinstance(value_entry, dict):
+            document.add_paragraph(f"{key}: {value_entry['value']} [{value_entry['source']}]")
+        else:
+            document.add_paragraph(f"{key}: {value_entry}")
 
     # Section: Charts
     chart_targets = {
