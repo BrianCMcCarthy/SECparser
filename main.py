@@ -11,6 +11,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import io
 import base64
+from docx import Document
+from docx.shared import Inches
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
@@ -314,6 +316,71 @@ def generate_charts():
                 break
 
     return jsonify(charts)
+
+@app.route("/generate-docx", methods=["GET"])
+def generate_docx():
+    ticker = request.args.get("ticker")
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    stock = yf.Ticker(ticker)
+    fin = stock.financials
+    cf = stock.cashflow
+    bal = stock.balance_sheet
+
+    def plot_series_to_img(series, title):
+        fig, ax = plt.subplots()
+        series = series.dropna().astype(float)
+        if series.empty:
+            return None
+        series.plot(kind="bar", ax=ax)
+        ax.set_title(title)
+        plt.tight_layout()
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    document = Document()
+    document.add_heading(f"Activist Report: {ticker.upper()}", 0)
+    
+    # Section: Financial Summary
+    summary = analyze_company(ticker)
+    document.add_heading("Financial Highlights", level=1)
+    for key, val in summary.items():
+        document.add_paragraph(f"{key}: {val['value']} [{val['source']}]")
+
+    # Section: Charts
+    chart_targets = {
+        "SG&A": ["Selling General Administrative", "Operating Expenses"],
+        "Net Income": ["Net Income"],
+        "Long Term Debt": ["Long Term Debt"],
+        "Share Buybacks": ["Repurchase Of Stock"]
+    }
+
+    document.add_heading("Charts", level=1)
+    for label, fields in chart_targets.items():
+        for key in fields:
+            if key in fin.index:
+                buf = plot_series_to_img(fin.loc[key], label)
+            elif key in cf.index:
+                buf = plot_series_to_img(cf.loc[key], label)
+            elif key in bal.index:
+                buf = plot_series_to_img(bal.loc[key], label)
+            else:
+                continue
+
+            if buf:
+                document.add_heading(label, level=2)
+                document.add_picture(buf, width=Inches(6))
+                break
+
+    # Save file
+    file_path = os.path.join(UPLOAD_FOLDER, f"{ticker}_activist_report.docx")
+    document.save(file_path)
+
+    return jsonify({"doc_path": file_path})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
