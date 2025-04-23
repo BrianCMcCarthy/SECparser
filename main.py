@@ -43,6 +43,30 @@ def calculate_trends(df, line_item):
 def label_source(value, source):
     return {"value": value, "source": source if value is not None else "Missing"}
 
+def parse_uploaded_content():
+    parsed_data = {
+        "board_insights": [],
+        "strategy_flags": []
+    }
+    try:
+        for filename in os.listdir(UPLOAD_FOLDER):
+            if not filename.endswith(".pdf"):
+                continue
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            doc = fitz.open(filepath)
+            text = "\n".join([page.get_text() for page in doc])
+            doc.close()
+
+            for line in text.split("\n"):
+                if re.search(r"(?i)director compensation|total compensation|meeting fees", line):
+                    parsed_data["board_insights"].append(line.strip())
+                if re.search(r"(?i)FLX Rewards|loyalty program|strategic initiative|omnichannel", line):
+                    parsed_data["strategy_flags"].append(line.strip())
+    except Exception as e:
+        parsed_data["error"] = f"Parse error: {str(e)}"
+
+    return parsed_data
+    
 def analyze_company(ticker):
     try:
         stock = yf.Ticker(ticker)
@@ -110,8 +134,143 @@ def analyze_company(ticker):
     summary["Net Income CAGR (%)"] = label_source(calculate_trends(fin, "Net Income"), "Calculated")
     summary["SG&A CAGR (%)"] = label_source(calculate_trends(fin, "Selling General Administrative"), "Calculated")
 
-    return summary
+    try:
+        market_cap = info.get("marketCap", None)
+        if market_cap and fcf and fcf != 0:
+            irr_table = []
+            hold_period = 3
+            for multiple in range(8, 13):
+                exit_ev = multiple * fcf
+                entry_ev = market_cap + (debt or 0) - (cash or 0)
+                irr = ((exit_ev / entry_ev) ** (1 / hold_period) - 1) * 100 if entry_ev > 0 else None
+                irr_table.append({"Exit EV/FCF": multiple, "IRR (%)": round(irr, 2) if irr else None})
+            summary["IRR Table"] = irr_table
+    except Exception as e:
+        summary["IRR Table"] = f"Error calculating IRR: {str(e)}"
     
+    return summary
+
+@app.route("/generate-docx", methods=["GET"])
+def generate_docx():
+    ticker = request.args.get("ticker")
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    stock = yf.Ticker(ticker)
+    fin = stock.financials
+    cf = stock.cashflow
+    bal = stock.balance_sheet
+
+    def plot_series_to_img(series, title):
+        fig, ax = plt.subplots()
+        series = series.dropna().astype(float)
+        if series.empty:
+            return None
+        series.plot(kind="bar", ax=ax)
+        ax.set_title(title)
+        plt.tight_layout()
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    document = Document()
+    document.add_heading(f"Activist Report: {ticker.upper()}", 0)
+
+    summary = analyze_company(ticker)
+    parsed = parse_uploaded_content()
+
+    document.add_heading("Financial Highlights", level=1)
+    for key in summary:
+        value_entry = summary[key]
+        if isinstance(value_entry, dict):
+            document.add_paragraph(f"{key}: {value_entry['value']} [{value_entry['source']}]")
+        else:
+            document.add_paragraph(f"{key}: {value_entry}")
+
+    document.add_heading("Charts", level=1)
+    chart_targets = {
+        "SG&A": ["Selling General Administrative", "Operating Expenses"],
+        "Net Income": ["Net Income"],
+        "Long Term Debt": ["Long Term Debt"],
+        "Share Buybacks": ["Repurchase Of Stock"]
+    }
+    for label, fields in chart_targets.items():
+        for key in fields:
+            if key in fin.index:
+                buf = plot_series_to_img(fin.loc[key], label)
+            elif key in cf.index:
+                buf = plot_series_to_img(cf.loc[key], label)
+            elif key in bal.index:
+                buf = plot_series_to_img(bal.loc[key], label)
+            else:
+                continue
+
+            if buf:
+                document.add_heading(label, level=2)
+                document.add_picture(buf, width=Inches(6))
+                break
+
+    document.add_heading("Governance & Board Review", level=1)
+    if parsed.get("board_insights"):
+        for item in parsed["board_insights"]:
+            document.add_paragraph(item)
+    else:
+        document.add_paragraph("No relevant board compensation disclosures found in uploaded materials.")
+
+    document.add_heading("Strategic Positioning Flags", level=1)
+    if parsed.get("strategy_flags"):
+        for item in parsed["strategy_flags"]:
+            document.add_paragraph(item)
+    else:
+        document.add_paragraph("No strategic initiative references found.")
+
+@app.route("/generate-brief", methods=["GET"])
+def generate_brief():
+    ticker = request.args.get("ticker")
+    peers = request.args.get("peers", "")
+    peer_list = [p.strip().upper() for p in peers.split(",") if p.strip()]
+
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    main_summary = analyze_company(ticker.upper())
+    peer_summaries = [analyze_company(p) for p in peer_list]
+    parsed = parse_uploaded_content()
+
+    insights = []
+    main_rev = main_summary["Revenue"]["value"] or 1
+    for peer in peer_summaries:
+        if peer["Gross Margin (%)"]["value"] and main_summary["Gross Margin (%)"]["value"] and \
+           peer["Gross Margin (%)"]["value"] > main_summary["Gross Margin (%)"]["value"] + 2:
+            insights.append(f"{main_summary['Ticker']} gross margin ({main_summary['Gross Margin (%)']['value']}%) is below {peer['Ticker']} at {peer['Gross Margin (%)']['value']}%. [[SOURCE: {main_summary['Gross Margin (%)']['source']}]]")
+
+        if peer["SG&A as % of Revenue"]["value"] and main_summary["SG&A as % of Revenue"]["value"] and \
+           peer["SG&A as % of Revenue"]["value"] < main_summary["SG&A as % of Revenue"]["value"] - 2:
+            insights.append(f"{main_summary['Ticker']} SG&A % of revenue ({main_summary['SG&A as % of Revenue']['value']}%) is higher than {peer['Ticker']} at {peer['SG&A as % of Revenue']['value']}%. [[SOURCE: {main_summary['SG&A as % of Revenue']['source']}]]")
+
+        if peer["FCF Margin (%)"]["value"] and main_summary["FCF Margin (%)"]["value"] and \
+           peer["FCF Margin (%)"]["value"] > main_summary["FCF Margin (%)"]["value"] + 2:
+            insights.append(f"{main_summary['Ticker']} FCF margin ({main_summary['FCF Margin (%)']['value']}%) lags {peer['Ticker']} at {peer['FCF Margin (%)']['value']}%. [[SOURCE: {main_summary['FCF Margin (%)']['source']}]]")
+
+    if parsed.get("strategy_flags"):
+        insights.append("\nStrategic initiatives referenced in uploaded materials:")
+        for line in parsed["strategy_flags"]:
+            insights.append(f"- {line}")
+
+    if parsed.get("board_insights"):
+        insights.append("\nBoard governance references in uploaded materials:")
+        for line in parsed["board_insights"]:
+            insights.append(f"- {line}")
+
+    return jsonify({
+        "ticker": ticker,
+        "executive_summary": insights,
+        "parsed_files": parsed,
+        "main_summary": main_summary,
+        "peer_summaries": peer_summaries})
+        
 @app.route("/analyze-activist", methods=["GET"])
 def analyze_activist():
     ticker = request.args.get("ticker")
@@ -331,22 +490,6 @@ def generate_charts():
 
     return jsonify(charts)
 
- try:
-        market_cap = info.get("marketCap", None)
-        if market_cap and fcf and fcf != 0:
-            irr_table = []
-            hold_period = 3
-            for multiple in range(8, 13):
-                exit_ev = multiple * fcf
-                entry_ev = market_cap + (debt or 0) - (cash or 0)
-                irr = ((exit_ev / entry_ev) ** (1 / hold_period) - 1) * 100 if entry_ev > 0 else None
-                irr_table.append({"Exit EV/FCF": multiple, "IRR (%)": round(irr, 2) if irr else None})
-            summary["IRR Table"] = irr_table
-    except Exception as e:
-        summary["IRR Table"] = f"Error calculating IRR: {str(e)}"
-
-    return summary
-
 @app.route("/generate-irr", methods=["GET"])
 def generate_irr():
     ticker = request.args.get("ticker")
@@ -360,11 +503,6 @@ def generate_irr():
 @app.route("/uploads/<path:filename>", methods=["GET"])
 def download_file(filename):
     return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
 
 # === DOCX GENERATION ===
 @app.route("/generate-docx", methods=["GET"])
