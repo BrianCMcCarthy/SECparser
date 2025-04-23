@@ -7,6 +7,7 @@ import fitz  # PyMuPDF
 import re
 from typing import List, Dict
 import matplotlib.pyplot as plt
+matplotlib.use('Agg') 
 import io
 import base64
 
