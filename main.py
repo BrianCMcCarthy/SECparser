@@ -528,37 +528,6 @@ def generate_prompt():
     full_prompt = generate_longform_prompt(main_summary, peer_summaries, insights, parsed)
     return jsonify({"prompt": full_prompt})
 
-@app.route("/generate-prompt", methods=["GET"])
-def generate_prompt():
-    ticker = request.args.get("ticker")
-    peers = request.args.get("peers", "")
-    peer_list = [p.strip().upper() for p in peers.split(",") if p.strip()]
-
-    if not ticker:
-        return jsonify({"error": "Missing 'ticker' parameter"}), 400
-
-    main_summary = analyze_company(ticker.upper())
-    peer_summaries = [analyze_company(p) for p in peer_list]
-    parsed = parse_uploaded_content()
-
-    insights = []
-    main_rev = main_summary["Revenue"]["value"] or 1
-    for peer in peer_summaries:
-        if peer["Gross Margin (%)"]["value"] and main_summary["Gross Margin (%)"]["value"] and \
-           peer["Gross Margin (%)"]["value"] > main_summary["Gross Margin (%)"]["value"] + 2:
-            insights.append(f"{main_summary['Ticker']} gross margin ({main_summary['Gross Margin (%)']['value']}%) is below {peer['Ticker']} at {peer['Gross Margin (%)']['value']}%.")
-
-        if peer["SG&A as % of Revenue"]["value"] and main_summary["SG&A as % of Revenue"]["value"] and \
-           peer["SG&A as % of Revenue"]["value"] < main_summary["SG&A as % of Revenue"]["value"] - 2:
-            insights.append(f"{main_summary['Ticker']} SG&A % of revenue ({main_summary['SG&A as % of Revenue']['value']}%) is higher than {peer['Ticker']} at {peer['SG&A as % of Revenue']['value']}%.")
-
-        if peer["FCF Margin (%)"]["value"] and main_summary["FCF Margin (%)"]["value"] and \
-           peer["FCF Margin (%)"]["value"] > main_summary["FCF Margin (%)"]["value"] + 2:
-            insights.append(f"{main_summary['Ticker']} FCF margin ({main_summary['FCF Margin (%)']['value']}%) lags {peer['Ticker']} at {peer['FCF Margin (%)']['value']}%.")
-
-    full_prompt = generate_longform_prompt(main_summary, peer_summaries, insights, parsed)
-    return jsonify({"prompt": full_prompt})
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
