@@ -317,7 +317,7 @@ def generate_brief():
     if not ticker:
         return jsonify({"error": "Missing 'ticker' parameter"}), 400
 
-    from analyze_company import analyze_company  # ensure this is imported
+    data = analyze_company(ticker.upper())  # ensure this is imported
     main_summary = analyze_company(ticker.upper())
     peer_summaries = [analyze_company(p) for p in peer_list]
     parsed = parse_uploaded_content()
@@ -372,28 +372,6 @@ def analyze_activist():
         "Peer Comparison": peer_summaries
     }
     return jsonify(result)
-
-    from analyze_company import analyze_company  # Ensure consistent import reference
-    data = analyze_company(ticker.upper())
-
-    if "error" in data:
-        return jsonify(data), 500
-
-    return jsonify({"ticker": ticker, "irr_table": data.get("IRR Table", [])})
-
-    file = request.files["file"]
-    if file.filename == "":
-        return jsonify({"error": "No selected file"}), 400
-
-    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(filepath)
-
-    try:
-        doc = fitz.open(filepath)
-        full_text = "\n".join([page.get_text() for page in doc])
-        doc.close()
-    except Exception as e:
-        return jsonify({"error": f"Failed to process file: {str(e)}"}), 500
 
     keywords = [
         "Board of Directors", "Compensation Committee", "Shareholder", "Dividend",
