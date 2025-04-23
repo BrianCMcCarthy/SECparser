@@ -297,7 +297,61 @@ def generate_charts():
     charts["Buybacks vs CapEx"] = plot_line("Repurchase Of Stock", cf, "Share Buybacks Over Time", "USD")
 
     return jsonify(charts)
-    
+
+@app.route("/generate-charts", methods=["GET"])
+def generate_charts():
+    import matplotlib.pyplot as plt
+    import io
+    import base64
+
+    ticker = request.args.get("ticker")
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    stock = yf.Ticker(ticker)
+    fin = stock.financials
+    cf = stock.cashflow
+    bal = stock.balance_sheet
+
+    charts = {}
+
+    def plot_and_encode(series, title):
+        fig, ax = plt.subplots()
+        series = series.dropna().astype(float)
+        if series.empty:
+            return None
+        series.plot(kind="bar", ax=ax)
+        ax.set_title(title)
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode("utf-8")
+
+    chart_targets = {
+        "SG&A": ["Selling General Administrative", "Operating Expenses"],
+        "Net Income": ["Net Income"],
+        "Long Term Debt": ["Long Term Debt"],
+        "Share Buybacks": ["Repurchase Of Stock"]
+    }
+
+    for label, options in chart_targets.items():
+        for key in options:
+            if key in fin.index:
+                encoded = plot_and_encode(fin.loc[key], label)
+            elif key in cf.index:
+                encoded = plot_and_encode(cf.loc[key], label)
+            elif key in bal.index:
+                encoded = plot_and_encode(bal.loc[key], label)
+            else:
+                continue
+            if encoded:
+                charts[label] = encoded
+                break
+
+    return jsonify(charts)
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
