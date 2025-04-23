@@ -13,6 +13,8 @@ import io
 import base64
 from docx import Document
 from docx.shared import Inches
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
@@ -46,7 +48,8 @@ def label_source(value, source):
 def parse_uploaded_content():
     parsed_data = {
         "board_insights": [],
-        "strategy_flags": []
+        "strategy_flags": [],
+        "board_comp_table": []
     }
     try:
         for filename in os.listdir(UPLOAD_FOLDER):
@@ -60,6 +63,14 @@ def parse_uploaded_content():
             for line in text.split("\n"):
                 if re.search(r"(?i)director compensation|total compensation|meeting fees", line):
                     parsed_data["board_insights"].append(line.strip())
+                    amt = re.search(r"\$[\d,.]+", line)
+                    parsed_data["board_comp_table"].append({
+                        "Name": "Unknown",
+                        "Title": "Director",
+                        "Amount": amt.group(0) if amt else "-",
+                        "Type": "Unknown",
+                        "Line": line.strip()
+                    })
                 if re.search(r"(?i)FLX Rewards|loyalty program|strategic initiative|omnichannel", line):
                     parsed_data["strategy_flags"].append(line.strip())
     except Exception as e:
@@ -212,10 +223,20 @@ def generate_docx():
                 document.add_picture(buf, width=Inches(6))
                 break
 
-    document.add_heading("Governance & Board Review", level=1)
-    if parsed.get("board_insights"):
-        for item in parsed["board_insights"]:
-            document.add_paragraph(item)
+ document.add_heading("Governance & Board Review", level=1)
+    board_table = parsed.get("board_comp_table", [])
+    if board_table:
+        table = document.add_table(rows=1, cols=5)
+        hdr_cells = table.rows[0].cells
+        for idx, title in enumerate(["Name", "Title", "Amount", "Type", "Line"]):
+            hdr_cells[idx].text = title
+        for entry in board_table:
+            row = table.add_row().cells
+            row[0].text = entry.get("Name", "")
+            row[1].text = entry.get("Title", "")
+            row[2].text = entry.get("Amount", "")
+            row[3].text = entry.get("Type", "")
+            row[4].text = entry.get("Line", "")
     else:
         document.add_paragraph("No relevant board compensation disclosures found in uploaded materials.")
 
