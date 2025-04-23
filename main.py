@@ -274,6 +274,16 @@ def generate_charts():
 
     charts = {}
 
+    chart_targets = {
+        "SG&A": ["Selling General Administrative", "Operating Expenses"],
+        "Net Income": ["Net Income"],
+        "Long Term Debt": ["Long Term Debt"],
+        "Share Buybacks": ["Repurchase Of Stock"],
+        "CapEx": ["Capital Expenditures"],
+        "Operating Cash Flow": ["Total Cash From Operating Activities"],
+        "Revenue": ["Total Revenue"]
+    }
+
     def plot_and_encode(series, title):
         fig, ax = plt.subplots()
         series = series.dropna().astype(float)
@@ -281,37 +291,27 @@ def generate_charts():
             return None
         series[::-1].plot(kind="bar", ax=ax)
         ax.set_title(title)
-        buf = io.BytesIO()
+        ax.set_ylabel("USD")
+        ax.set_xlabel("Date")
         plt.tight_layout()
+        buf = io.BytesIO()
         plt.savefig(buf, format="png")
         plt.close(fig)
         buf.seek(0)
-        return "data:image/png;base64," + base64.b64encode(buf.read()).decode("utf-8")
-
-    chart_targets = {
-        "SG&A": ["Selling General Administrative", "Operating Expenses", "Total Operating Expenses"],
-        "Net Income": ["Net Income"],
-        "Long Term Debt": ["Long Term Debt", "Total Debt"],
-        "Share Buybacks": ["Repurchase Of Stock", "Purchase Of Stock"]
-    }
+        return base64.b64encode(buf.read()).decode("utf-8")
 
     for label, options in chart_targets.items():
-        encoded = None
+        found = False
         for key in options:
-            source = None
-            if key in fin.index:
-                source = fin
-            elif key in cf.index:
-                source = cf
-            elif key in bal.index:
-                source = bal
-
-            if source is not None:
-                encoded = plot_and_encode(source.loc[key], f"{label} Over Time")
-                if encoded:
-                    break
-        if encoded:
-            charts[label] = encoded
+            for df_name, df in [("financials", fin), ("cashflow", cf), ("balance_sheet", bal)]:
+                if key in df.index:
+                    encoded = plot_and_encode(df.loc[key], f"{label} ({df_name})")
+                    if encoded:
+                        charts[label] = encoded
+                        found = True
+                        break
+            if found:
+                break
 
     return jsonify(charts)
 
