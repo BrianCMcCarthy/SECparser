@@ -111,6 +111,7 @@ def analyze_company(ticker):
     summary["SG&A CAGR (%)"] = label_source(calculate_trends(fin, "Selling General Administrative"), "Calculated")
 
     return summary
+    
 @app.route("/analyze-activist", methods=["GET"])
 def analyze_activist():
     ticker = request.args.get("ticker")
@@ -329,6 +330,32 @@ def generate_charts():
                 break
 
     return jsonify(charts)
+
+@app.route("/generate-irr", methods=["GET"])
+def generate_irr():
+    ticker = request.args.get("ticker")
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    summary = analyze_company(ticker)
+    if "error" in summary:
+        return jsonify(summary), 500
+
+    fcf = summary["Free Cash Flow"]["value"]
+    net_debt = summary["Net Debt"]["value"]
+    market_cap = summary["Market Cap"]["value"]
+
+    if not all([fcf, market_cap]) or fcf <= 0:
+        return jsonify({"error": "Invalid or missing financial data for IRR calculation."}), 400
+
+    irr_table = []
+    entry_price = market_cap + (net_debt or 0)
+    for exit_multiple in [8, 9, 10, 11, 12]:
+        exit_value = exit_multiple * fcf
+        irr = ((exit_value - entry_price) / entry_price) ** (1/3) - 1
+        irr_table.append({"EV/FCF Exit Multiple": exit_multiple, "Implied IRR (%)": round(irr * 100, 2)})
+
+    return jsonify({"IRR Table": irr_table, "Entry Price": entry_price, "FCF": fcf, "Net Debt": net_debt})
 
 # === DOCX GENERATION ===
 @app.route("/generate-docx", methods=["GET"])
