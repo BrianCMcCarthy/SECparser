@@ -373,12 +373,6 @@ def analyze_activist():
     }
     return jsonify(result)
 
-@app.route("/generate-irr", methods=["GET"])
-def generate_irr():
-    ticker = request.args.get("ticker")
-    if not ticker:
-        return jsonify({"error": "Missing 'ticker' parameter"}), 400
-
     from analyze_company import analyze_company  # Ensure consistent import reference
     data = analyze_company(ticker.upper())
 
