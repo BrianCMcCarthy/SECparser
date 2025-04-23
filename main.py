@@ -177,8 +177,13 @@ def generate_docx():
         series = series.dropna().astype(float)
         if series.empty:
             return None
-        series.plot(kind="bar", ax=ax)
-        ax.set_title(title)
+        series.plot(kind="bar", ax=ax, color="steelblue")
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.set_ylabel("USD", fontsize=12)
+        ax.set_xlabel("Date", fontsize=12)
+        ax.grid(True, which='major', axis='y', linestyle='--', alpha=0.7)
+        ax.legend([title], loc='upper left', fontsize=10)
+        plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
         buf = io.BytesIO()
         plt.savefig(buf, format="png")
@@ -201,6 +206,7 @@ def generate_docx():
             document.add_paragraph(f"{key}: {value_entry}")
 
     document.add_heading("Charts", level=1)
+    document.add_paragraph("The following charts visualize key financial trends. These metrics are critical for evaluating performance, operational efficiency, and shareholder returns. Interpretations such as margin compression, leverage changes, or capital allocation behaviors can often be observed visually.")
     chart_targets = {
         "SG&A": ["Selling General Administrative", "Operating Expenses"],
         "Net Income": ["Net Income"],
@@ -223,7 +229,7 @@ def generate_docx():
                 document.add_picture(buf, width=Inches(6))
                 break
 
- document.add_heading("Governance & Board Review", level=1)
+    document.add_heading("Governance & Board Review", level=1)
     board_table = parsed.get("board_comp_table", [])
     if board_table:
         table = document.add_table(rows=1, cols=5)
