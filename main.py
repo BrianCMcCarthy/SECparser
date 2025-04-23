@@ -6,8 +6,9 @@ import os
 import fitz  # PyMuPDF
 import re
 from typing import List, Dict
-import matplotlib.pyplot as plt
+import matplotlib
 matplotlib.use('Agg') 
+import matplotlib.pyplot as plt
 import io
 import base64
 
