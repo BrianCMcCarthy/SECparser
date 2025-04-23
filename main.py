@@ -6,6 +6,9 @@ import os
 import fitz  # PyMuPDF
 import re
 from typing import List, Dict
+import matplotlib.pyplot as plt
+import io
+import base64
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
@@ -256,6 +259,45 @@ def extract_board_comp_table(text: str) -> List[Dict[str, str]]:
                 continue
     return comp_entries
 
+@app.route("/chart", methods=["GET"])
+def generate_charts():
+    ticker = request.args.get("ticker")
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    stock = yf.Ticker(ticker)
+    fin = stock.financials
+    bal = stock.balance_sheet
+    cf = stock.cashflow
+
+    charts = {}
+
+    def plot_line(item, df, title, ylabel):
+        if item not in df.index:
+            return None
+        series = df.loc[item].dropna().astype(float)
+        if series.empty:
+            return None
+        fig, ax = plt.subplots()
+        series[::-1].plot(ax=ax, marker="o")
+        ax.set_title(title)
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel("Date")
+        fig.tight_layout()
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        buf.seek(0)
+        img_b64 = base64.b64encode(buf.read()).decode("utf-8")
+        plt.close(fig)
+        return img_b64
+
+    charts["SG&A as % of Revenue"] = plot_line("Selling General Administrative", fin, "SG&A Expense Over Time", "USD")
+    charts["Net Income Margin"] = plot_line("Net Income", fin, "Net Income Over Time", "USD")
+    charts["Net Debt"] = plot_line("Long Term Debt", bal, "Long Term Debt Over Time", "USD")
+    charts["Buybacks vs CapEx"] = plot_line("Repurchase Of Stock", cf, "Share Buybacks Over Time", "USD")
+
+    return jsonify(charts)
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
