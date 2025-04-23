@@ -46,24 +46,34 @@ def label_source(value, source):
 def analyze_company(ticker):
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info or {}
+        info = stock.info if stock.info else {}
+        fin = stock.financials if not stock.financials.empty else pd.DataFrame()
+        bal = stock.balance_sheet if not stock.balance_sheet.empty else pd.DataFrame()
+        cf = stock.cashflow if not stock.cashflow.empty else pd.DataFrame()
+        qbal = stock.quarterly_balance_sheet if not stock.quarterly_balance_sheet.empty else pd.DataFrame()
+        qcf = stock.quarterly_cashflow if not stock.quarterly_cashflow.empty else pd.DataFrame()
     except Exception as e:
-        print(f"Yahoo Finance API error for {ticker}: {e}")
         return {"error": f"Yahoo Finance failed for {ticker}: {str(e)}"}
+
     name = info.get("longName", ticker)
-    fin = stock.financials
-    bal = stock.balance_sheet
-    cf = stock.cashflow
-    qbal = stock.quarterly_balance_sheet
-    qcf = stock.quarterly_cashflow
+
+    def get_val(df, label, fallback_label=None):
+        try:
+            if label in df.index:
+                return extract_latest(df.loc[label])
+            if fallback_label and fallback_label in df.index:
+                return extract_latest(df.loc[fallback_label])
+        except Exception:
+            return None
+        return None
 
     summary = {
         "Company": name,
         "Ticker": ticker.upper(),
-        "Revenue": label_source(extract_latest(fin.loc["Total Revenue"]) if "Total Revenue" in fin.index else None, "Yahoo Finance"),
-        "Gross Profit": label_source(extract_latest(fin.loc["Gross Profit"]) if "Gross Profit" in fin.index else None, "Yahoo Finance"),
-        "SG&A": label_source(safe_extract(fin, ["Selling General Administrative", "Operating Expenses"]), "Estimated"),
-        "Net Income": label_source(extract_latest(fin.loc["Net Income"]) if "Net Income" in fin.index else None, "Yahoo Finance")
+        "Revenue": label_source(get_val(fin, "Total Revenue"), "Yahoo Finance"),
+        "Gross Profit": label_source(get_val(fin, "Gross Profit"), "Yahoo Finance"),
+        "SG&A": label_source(get_val(fin, "Selling General Administrative", "Operating Expenses"), "Estimated"),
+        "Net Income": label_source(get_val(fin, "Net Income"), "Yahoo Finance")
     }
 
     rev = summary["Revenue"]["value"]
@@ -75,19 +85,18 @@ def analyze_company(ticker):
     summary["Net Income Margin (%)"] = label_source(round(ni / rev * 100, 2) if ni and rev else None, "Calculated")
     summary["SG&A as % of Revenue"] = label_source(round(sga / rev * 100, 2) if sga and rev else None, "Calculated")
 
-    summary["Cash"] = label_source(safe_extract(bal, ["Cash", "Cash And Cash Equivalents"]) or safe_extract(qbal, ["Cash", "Cash And Cash Equivalents"]), "Yahoo Finance")
-    summary["Total Debt"] = label_source(safe_extract(bal, ["Long Term Debt", "Total Debt"]) or safe_extract(qbal, ["Long Term Debt", "Total Debt"]), "Yahoo Finance")
-    equity = safe_extract(bal, ["Total Stockholder Equity"]) or safe_extract(qbal, ["Total Stockholder Equity"])
+    cash = get_val(bal, "Cash") or get_val(qbal, "Cash")
+    debt = get_val(bal, "Long Term Debt", "Total Debt") or get_val(qbal, "Long Term Debt", "Total Debt")
+    equity = get_val(bal, "Total Stockholder Equity") or get_val(qbal, "Total Stockholder Equity")
 
-    cash = summary["Cash"]["value"]
-    debt = summary["Total Debt"]["value"]
-
-    summary["Net Debt"] = label_source((debt - cash) if cash is not None and debt is not None else None, "Calculated")
+    summary["Cash"] = label_source(cash, "Yahoo Finance")
+    summary["Total Debt"] = label_source(debt, "Yahoo Finance")
+    summary["Net Debt"] = label_source(debt - cash if debt and cash else None, "Calculated")
     summary["Debt-to-Equity Ratio"] = label_source(round(debt / equity, 2) if debt and equity else None, "Calculated")
 
-    ocf = safe_extract(cf, ["Total Cash From Operating Activities"]) or safe_extract(qcf, ["Total Cash From Operating Activities"])
-    capex = safe_extract(cf, ["Capital Expenditures"]) or safe_extract(qcf, ["Capital Expenditures"])
-    buybacks = safe_extract(cf, ["Repurchase Of Stock"]) or safe_extract(qcf, ["Repurchase Of Stock"])
+    ocf = get_val(cf, "Total Cash From Operating Activities") or get_val(qcf, "Total Cash From Operating Activities")
+    capex = get_val(cf, "Capital Expenditures") or get_val(qcf, "Capital Expenditures")
+    buybacks = get_val(cf, "Repurchase Of Stock") or get_val(qcf, "Repurchase Of Stock")
 
     summary["Operating Cash Flow"] = label_source(ocf, "Estimated")
     summary["CapEx"] = label_source(capex, "Estimated")
@@ -102,7 +111,6 @@ def analyze_company(ticker):
     summary["SG&A CAGR (%)"] = label_source(calculate_trends(fin, "Selling General Administrative"), "Calculated")
 
     return summary
-
 @app.route("/analyze-activist", methods=["GET"])
 def analyze_activist():
     ticker = request.args.get("ticker")
