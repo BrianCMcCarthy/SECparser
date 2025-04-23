@@ -528,6 +528,18 @@ def generate_prompt():
     full_prompt = generate_longform_prompt(main_summary, peer_summaries, insights, parsed)
     return jsonify({"prompt": full_prompt})
 
+@app.route("/generate-irr", methods=["GET"])
+def generate_irr():
+    ticker = request.args.get("ticker")
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    data = analyze_company(ticker.upper())
+    if "error" in data:
+        return jsonify(data), 500
+
+    return jsonify({"ticker": ticker.upper(), "irr_table": data.get("IRR Table", "Not Available")})
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
