@@ -334,7 +334,7 @@ def generate_charts():
         "Revenue": ["Total Revenue"]
     }
 
-    def plot_and_encode(series, title, ticker):
+def plot_and_encode(series, title, ticker):
     series = series.dropna().astype(float)
     if series.empty or len(series) < 2:
         return None
