@@ -59,6 +59,61 @@ def safe_extract(df, key):
     print(f"[WARN] Missing: {key} - Checked: {labels}")
     return None
 
+def generate_docx_report(ticker, summary, parsed):
+    document = Document()
+    document.add_heading(f"Activist Report: {ticker.upper()}", 0)
+
+    document.add_heading("1. Executive Summary", level=1)
+    document.add_paragraph("This report evaluates financial performance, strategic direction, and governance quality of the target company.")
+
+    document.add_heading("2. Financial Highlights", level=1)
+    for key in summary:
+        value_entry = summary[key]
+        if isinstance(value_entry, dict):
+            document.add_paragraph(f"{key}: {value_entry['value']} [{value_entry['source']}]")
+        else:
+            document.add_paragraph(f"{key}: {value_entry}")
+
+    document.add_heading("3. Charts", level=1)
+    document.add_paragraph("Charts visualize key financial metrics and reveal capital structure, margin trends, and investment efficiency.")
+
+    # Placeholder chart rendering - assuming plots exist
+    chart_keys = ["SG&A", "Net Income", "Long Term Debt", "Share Buybacks"]
+    for chart_key in chart_keys:
+        chart_path = os.path.join(UPLOAD_FOLDER, f"{ticker}_{chart_key.replace(' ', '_')}.png")
+        if os.path.exists(chart_path):
+            document.add_heading(chart_key, level=2)
+            document.add_picture(chart_path, width=Inches(6))
+
+    document.add_heading("4. Governance & Board Review", level=1)
+    board_table = parsed.get("board_comp_table", [])
+    if board_table:
+        table = document.add_table(rows=1, cols=6)
+        hdr_cells = table.rows[0].cells
+        for idx, title in enumerate(["Name", "Title", "Amount", "Type", "Line", "Year"]):
+            hdr_cells[idx].text = title
+        for entry in board_table:
+            row = table.add_row().cells
+            row[0].text = entry.get("Name", "")
+            row[1].text = entry.get("Title", "")
+            row[2].text = entry.get("Amount", "")
+            row[3].text = entry.get("Type", "")
+            row[4].text = entry.get("Line", "")
+            row[5].text = entry.get("Year", "")
+    else:
+        document.add_paragraph("No board compensation findings in uploaded materials.")
+
+    document.add_heading("5. Strategic Positioning Flags", level=1)
+    if parsed.get("strategy_flags"):
+        for item in parsed["strategy_flags"]:
+            document.add_paragraph(item)
+    else:
+        document.add_paragraph("No strategic initiative disclosures found in uploads.")
+
+    file_path = os.path.join(UPLOAD_FOLDER, f"{ticker}_activist_report.docx")
+    document.save(file_path)
+    return file_path
+
 def calculate_trends(df, line_item):
     aliases = FINANCIAL_LABEL_ALIASES.get(line_item, [line_item])
     for label in aliases:
@@ -279,28 +334,27 @@ def generate_charts():
         "Revenue": ["Total Revenue"]
     }
 
-    def plot_and_encode(series, title):
-        series = series.dropna().astype(float)
-        if series.empty or len(series) < 2:
-            return None
+    def plot_and_encode(series, title, ticker):
+    series = series.dropna().astype(float)
+    if series.empty or len(series) < 2:
+        return None
 
-        fig, ax = plt.subplots()
-        series[::-1].plot(kind="bar", ax=ax, color="steelblue")
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        ax.set_ylabel("USD", fontsize=12)
-        ax.set_xlabel("Date", fontsize=12)
-        ax.grid(True, which='major', axis='y', linestyle='--', alpha=0.7)
-        ax.legend([title], loc='upper left', fontsize=10)
-        for i, v in enumerate(series[::-1]):
-            ax.text(i, v, f"{v:,.0f}", ha='center', va='bottom', fontsize=8, rotation=0)
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
+    fig, ax = plt.subplots()
+    series[::-1].plot(kind="bar", ax=ax, color="steelblue")
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_ylabel("USD", fontsize=12)
+    ax.set_xlabel("Date", fontsize=12)
+    ax.grid(True, which='major', axis='y', linestyle='--', alpha=0.7)
+    ax.legend([title], loc='upper left', fontsize=10)
+    for i, v in enumerate(series[::-1]):
+        ax.text(i, v, f"{v:,.0f}", ha='center', va='bottom', fontsize=8, rotation=0)
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
 
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png")
-        plt.close(fig)
-        buf.seek(0)
-        return base64.b64encode(buf.read()).decode("utf-8")
+    chart_path = f"{UPLOAD_FOLDER}/{ticker}_{title.replace(' ', '_')}.png"
+    plt.savefig(chart_path, format="png")
+    plt.close(fig)
+    return chart_path
 
     for label, options in chart_targets.items():
         for key in options:
@@ -321,101 +375,10 @@ def generate_docx():
     if not ticker:
         return jsonify({"error": "Missing 'ticker' parameter"}), 400
 
-    stock = yf.Ticker(ticker)
-    fin = stock.financials
-    cf = stock.cashflow
-    bal = stock.balance_sheet
-
-    def plot_series_to_img(series, title):
-        fig, ax = plt.subplots()
-        series = series.dropna().astype(float)
-        if series.empty:
-            return None
-        series.plot(kind="bar", ax=ax, color="steelblue")
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        ax.set_ylabel("USD", fontsize=12)
-        ax.set_xlabel("Date", fontsize=12)
-        ax.grid(True, which='major', axis='y', linestyle='--', alpha=0.7)
-        ax.legend([title], loc='upper left', fontsize=10)
-        for i, v in enumerate(series):
-            if not pd.isna(v):
-                ax.text(i, v, f"{v:,.0f}", ha='center', va='bottom', fontsize=8, rotation=0)
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png")
-        plt.close(fig)
-        buf.seek(0)
-        return buf
-
-    document = Document()
-    document.add_heading(f"Activist Report: {ticker.upper()}", 0)
-
-    summary = analyze_company(ticker)
+    summary = analyze_company(ticker.upper())
     parsed = parse_uploaded_content()
 
-    document.add_heading("Financial Highlights", level=1)
-    for key in summary:
-        value_entry = summary[key]
-        if isinstance(value_entry, dict):
-            document.add_paragraph(f"{key}: {value_entry['value']} [{value_entry['source']}]")
-        else:
-            document.add_paragraph(f"{key}: {value_entry}")
-
-    document.add_heading("Charts", level=1)
-    document.add_paragraph(
-        "The following charts provide a visual summary of key financial trends, helping stakeholders quickly grasp financial strengths, risks, and strategic signals."
-    )
-
-    chart_targets = {
-        "SG&A": ["Selling General Administrative", "Operating Expenses"],
-        "Net Income": ["Net Income"],
-        "Long Term Debt": ["Long Term Debt"],
-        "Share Buybacks": ["Repurchase Of Stock"]
-    }
-    for label, fields in chart_targets.items():
-        for key in fields:
-            if key in fin.index:
-                buf = plot_series_to_img(fin.loc[key], label)
-            elif key in cf.index:
-                buf = plot_series_to_img(cf.loc[key], label)
-            elif key in bal.index:
-                buf = plot_series_to_img(bal.loc[key], label)
-            else:
-                continue
-
-            if buf:
-                document.add_heading(label, level=2)
-                document.add_picture(buf, width=Inches(6))
-                break
-
-    document.add_heading("Governance & Board Review", level=1)
-    board_table = parsed.get("board_comp_table", [])
-    if board_table:
-        table = document.add_table(rows=1, cols=6)
-        hdr_cells = table.rows[0].cells
-        for idx, title in enumerate(["Name", "Title", "Amount", "Type", "Line", "Year"]):
-            hdr_cells[idx].text = title
-        for entry in board_table:
-            row = table.add_row().cells
-            row[0].text = entry.get("Name", "")
-            row[1].text = entry.get("Title", "")
-            row[2].text = entry.get("Amount", "")
-            row[3].text = entry.get("Type", "")
-            row[4].text = entry.get("Line", "")
-            row[5].text = entry.get("Year", "")
-    else:
-        document.add_paragraph("No relevant board compensation disclosures found in uploaded materials.")
-
-    document.add_heading("Strategic Positioning Flags", level=1)
-    if parsed.get("strategy_flags"):
-        for item in parsed["strategy_flags"]:
-            document.add_paragraph(item)
-    else:
-        document.add_paragraph("No strategic initiative references found.")
-
-    file_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{ticker}_activist_report.docx")
-    document.save(file_path)
+    file_path = generate_docx_report(ticker, summary, parsed)
     return jsonify({"doc_path": file_path})
 
 @app.route("/generate-brief", methods=["GET"])
