@@ -21,7 +21,7 @@ app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-API_KEY = os.environ.get("API_KEY", "supersecretkey")
+API_KEY = os.environ.get("API_KEY", "McCarthy-Agentic-Agent-API-20250423")
 
 def require_api_key(view_function):
     @wraps(view_function)
