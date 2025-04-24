@@ -42,7 +42,7 @@ FINANCIAL_LABEL_ALIASES = {
 }
 
 # === Analysis & Helper Functions ===
-ef extract_latest(series, fallback=None):
+def extract_latest(series, fallback=None):
     try:
         value = series.dropna().iloc[0]
         return int(value) if float(value).is_integer() else round(float(value), 2)
