@@ -15,6 +15,31 @@ from docx import Document
 from docx.shared import Inches
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from functools import wraps
+
+app = Flask(__name__)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+API_KEY = os.environ.get("API_KEY", "supersecretkey")
+
+def require_api_key(view_function):
+    @wraps(view_function)
+    def decorated_function(*args, **kwargs):
+        key = request.headers.get("X-API-KEY")
+        if key and key == API_KEY:
+            return view_function(*args, **kwargs)
+        else:
+            return jsonify({"error": "Unauthorized"}), 401
+    return decorated_function
+
+# === Analysis & Helper Functions ===
+def extract_latest(series, fallback=None):
+    try:
+        value = series.dropna().iloc[0]
+        return int(value) if float(value).is_integer() else round(float(value), 2)
+    except:
+        return fallback
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = "uploads"
@@ -251,6 +276,7 @@ def parse_uploaded_content():
     return parsed_data
 
 @app.route("/upload-file", methods=["POST"])
+@require_api_key
 def upload_file():
     if "file" not in request.files:
         return jsonify({"error": "No file part in request"}), 400
@@ -312,6 +338,7 @@ def extract_board_comp_table(text: str) -> List[Dict[str, str]]:
     return comp_entries
 
 @app.route("/generate-charts", methods=["GET"])
+@require_api_key
 def generate_charts():
     ticker = request.args.get("ticker")
     if not ticker:
@@ -370,6 +397,7 @@ def plot_and_encode(series, title, ticker):
     return jsonify(charts)
 
 @app.route("/generate-docx", methods=["GET"])
+@require_api_key
 def generate_docx():
     ticker = request.args.get("ticker")
     if not ticker:
@@ -382,6 +410,7 @@ def generate_docx():
     return jsonify({"doc_path": file_path})
 
 @app.route("/generate-brief", methods=["GET"])
+@require_api_key
 def generate_brief():
     ticker = request.args.get("ticker")
     peers = request.args.get("peers", "")
@@ -428,6 +457,7 @@ def generate_brief():
     })
 
 @app.route("/analyze-activist", methods=["GET"])
+@require_api_key
 def analyze_activist():
     ticker = request.args.get("ticker")
     peers = request.args.get("peers", "")
@@ -446,6 +476,7 @@ def analyze_activist():
     return jsonify(result)
 
 @app.route("/uploads/<path:filename>", methods=["GET"])
+@require_api_key
 def download_file(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename, as_attachment=True)
 
@@ -506,6 +537,7 @@ PARSED FILE EXCERPTS:
     return prompt
 
 @app.route("/generate-prompt", methods=["GET"])
+@require_api_key
 def generate_prompt():
     ticker = request.args.get("ticker")
     peers = request.args.get("peers", "")
@@ -537,6 +569,7 @@ def generate_prompt():
     return jsonify({"prompt": full_prompt})
 
 @app.route("/generate-irr", methods=["GET"])
+@require_api_key
 def generate_irr():
     ticker = request.args.get("ticker")
     if not ticker:
@@ -549,6 +582,7 @@ def generate_irr():
     return jsonify({"ticker": ticker.upper(), "irr_table": data.get("IRR Table", "Not Available")})
 
 @app.route("/generate-narrative", methods=["GET"])
+@require_api_key
 def generate_narrative():
     ticker = request.args.get("ticker")
     peers = request.args.get("peers", "")
