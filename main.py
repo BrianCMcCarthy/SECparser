@@ -17,8 +17,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = "uploads"
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
 # === Analysis & Helper Functions ===
 def extract_latest(series, fallback=None):
@@ -46,6 +46,89 @@ def calculate_trends(df, line_item):
 def label_source(value, source):
     return {"value": value, "source": source if value is not None else "Missing"}
 
+def analyze_company(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info if stock.info else {}
+        fin = stock.financials if not stock.financials.empty else pd.DataFrame()
+        bal = stock.balance_sheet if not stock.balance_sheet.empty else pd.DataFrame()
+        cf = stock.cashflow if not stock.cashflow.empty else pd.DataFrame()
+        qbal = stock.quarterly_balance_sheet if not stock.quarterly_balance_sheet.empty else pd.DataFrame()
+        qcf = stock.quarterly_cashflow if not stock.quarterly_cashflow.empty else pd.DataFrame()
+    except Exception as e:
+        return {"error": f"Yahoo Finance failed for {ticker}: {str(e)}"}
+
+    name = info.get("longName", ticker)
+
+    def get_val(df, label, fallback_label=None):
+        try:
+            if label in df.index:
+                return extract_latest(df.loc[label])
+            if fallback_label and fallback_label in df.index:
+                return extract_latest(df.loc[fallback_label])
+        except Exception:
+            return None
+        return None
+
+    summary = {
+        "Company": name,
+        "Ticker": ticker.upper(),
+        "Revenue": label_source(get_val(fin, "Total Revenue"), "Yahoo Finance"),
+        "Gross Profit": label_source(get_val(fin, "Gross Profit"), "Yahoo Finance"),
+        "SG&A": label_source(get_val(fin, "Selling General Administrative", "Operating Expenses"), "Estimated"),
+        "Net Income": label_source(get_val(fin, "Net Income"), "Yahoo Finance")
+    }
+
+    rev = summary["Revenue"]["value"]
+    gp = summary["Gross Profit"]["value"]
+    ni = summary["Net Income"]["value"]
+    sga = summary["SG&A"]["value"]
+
+    summary["Gross Margin (%)"] = label_source(round(gp / rev * 100, 2) if gp and rev else None, "Calculated")
+    summary["Net Income Margin (%)"] = label_source(round(ni / rev * 100, 2) if ni and rev else None, "Calculated")
+    summary["SG&A as % of Revenue"] = label_source(round(sga / rev * 100, 2) if sga and rev else None, "Calculated")
+
+    cash = get_val(bal, "Cash") or get_val(qbal, "Cash")
+    debt = get_val(bal, "Long Term Debt", "Total Debt") or get_val(qbal, "Long Term Debt", "Total Debt")
+    equity = get_val(bal, "Total Stockholder Equity") or get_val(qbal, "Total Stockholder Equity")
+
+    summary["Cash"] = label_source(cash, "Yahoo Finance")
+    summary["Total Debt"] = label_source(debt, "Yahoo Finance")
+    summary["Net Debt"] = label_source(debt - cash if debt and cash else None, "Calculated")
+    summary["Debt-to-Equity Ratio"] = label_source(round(debt / equity, 2) if debt and equity else None, "Calculated")
+
+    ocf = get_val(cf, "Total Cash From Operating Activities") or get_val(qcf, "Total Cash From Operating Activities")
+    capex = get_val(cf, "Capital Expenditures") or get_val(qcf, "Capital Expenditures")
+    buybacks = get_val(cf, "Repurchase Of Stock") or get_val(qcf, "Repurchase Of Stock")
+
+    summary["Operating Cash Flow"] = label_source(ocf, "Estimated")
+    summary["CapEx"] = label_source(capex, "Estimated")
+    summary["Share Buybacks"] = label_source(buybacks, "Estimated")
+
+    fcf = ocf + capex if ocf and capex else None
+    summary["Free Cash Flow"] = label_source(fcf, "Calculated")
+    summary["FCF Margin (%)"] = label_source(round(fcf / rev * 100, 2) if fcf and rev else None, "Calculated")
+
+    summary["Revenue CAGR (%)"] = label_source(calculate_trends(fin, "Total Revenue"), "Calculated")
+    summary["Net Income CAGR (%)"] = label_source(calculate_trends(fin, "Net Income"), "Calculated")
+    summary["SG&A CAGR (%)"] = label_source(calculate_trends(fin, "Selling General Administrative"), "Calculated")
+
+    try:
+        market_cap = info.get("marketCap", None)
+        if market_cap and fcf and fcf != 0:
+            irr_table = []
+            hold_period = 3
+            for multiple in range(8, 13):
+                exit_ev = multiple * fcf
+                entry_ev = market_cap + (debt or 0) - (cash or 0)
+                irr = ((exit_ev / entry_ev) ** (1 / hold_period) - 1) * 100 if entry_ev > 0 else None
+                irr_table.append({"Exit EV/FCF": multiple, "IRR (%)": round(irr, 2) if irr else None})
+            summary["IRR Table"] = irr_table
+    except Exception as e:
+        summary["IRR Table"] = f"Error calculating IRR: {str(e)}"
+
+    return summary
+
 def parse_uploaded_content():
     parsed_data = {
         "board_insights": [],
@@ -53,10 +136,10 @@ def parse_uploaded_content():
         "board_comp_table": []
     }
     try:
-        for filename in os.listdir(UPLOAD_FOLDER):
+        for filename in os.listdir(app.config["UPLOAD_FOLDER"]):
             if not filename.lower().endswith(".pdf"):
                 continue
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
             try:
                 doc = fitz.open(filepath)
                 text = "\n".join([page.get_text() for page in doc])
@@ -94,7 +177,7 @@ def upload_file():
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
-    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
     file.save(filepath)
 
     try:
@@ -304,7 +387,7 @@ def generate_docx():
     else:
         document.add_paragraph("No strategic initiative references found.")
 
-    file_path = os.path.join(UPLOAD_FOLDER, f"{ticker}_activist_report.docx")
+    file_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{ticker}_activist_report.docx")
     document.save(file_path)
     return jsonify({"doc_path": file_path})
 
@@ -317,7 +400,6 @@ def generate_brief():
     if not ticker:
         return jsonify({"error": "Missing 'ticker' parameter"}), 400
 
-    data = analyze_company(ticker.upper())  # ensure this is imported
     main_summary = analyze_company(ticker.upper())
     peer_summaries = [analyze_company(p) for p in peer_list]
     parsed = parse_uploaded_content()
@@ -373,51 +455,9 @@ def analyze_activist():
     }
     return jsonify(result)
 
-    keywords = [
-        "Board of Directors", "Compensation Committee", "Shareholder", "Dividend",
-        "BOPIS", "Loyalty", "FLX Rewards", "Private Label", "Digital", "App", "Buyback",
-        "Ometria", "CDP", "Return Policy", "Omnichannel", "E-commerce"
-    ]
-
-    excerpts = []
-    for line in full_text.split("\n"):
-        for kw in keywords:
-            if kw.lower() in line.lower():
-                excerpts.append({"keyword": kw, "excerpt": line.strip()})
-
-    board_comp_table = extract_board_comp_table(full_text)
-
-    return jsonify({
-        "filename": file.filename,
-        "excerpts": excerpts,
-        "board_comp_table": board_comp_table,
-        "keywords_matched": list(set([e["keyword"] for e in excerpts])),
-        "num_findings": len(excerpts),
-        "num_comp_entries": len(board_comp_table)
-    })
-
-def extract_board_comp_table(text: str) -> List[Dict[str, str]]:
-    comp_entries = []
-    pattern = r"(?i)(?:[\$€¥£]\s?[\d{1,3},]*\d{1,3}(?:\.\d{1,2})?)"
-    lines = text.split("\n")
-    for line in lines:
-        matches = re.findall(pattern, line)
-        for match in matches:
-            normalized = match.replace(",", "").replace(" ", "")
-            try:
-                value = float(re.sub(r"[^\d.]", "", normalized))
-                if value >= 1 and value <= 20000000:
-                    comp_entries.append({
-                        "Line": line.strip(),
-                        "Reported Comp": f"${int(value) if value.is_integer() else round(value, 2)}"
-                    })
-            except:
-                continue
-    return comp_entries
-
 @app.route("/uploads/<path:filename>", methods=["GET"])
 def download_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+    return send_from_directory(app.config["UPLOAD_FOLDER"], filename, as_attachment=True)
 
 
 def generate_longform_prompt(summary, peers, insights, parsed):
