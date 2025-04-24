@@ -20,28 +20,55 @@ app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = "uploads"
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
+# === Aliases for Label Matching ===
+FINANCIAL_LABEL_ALIASES = {
+    "Revenue": ["Total Revenue", "Revenues", "Net Sales", "Sales"],
+    "Gross Profit": ["Gross Profit", "Gross Income"],
+    "SG&A": [
+        "Selling General Administrative",
+        "Operating Expenses",
+        "SG&A Expense",
+        "Selling & Admin",
+        "Selling and Admin",
+        "Selling, general and administrative expenses"
+    ],
+    "Net Income": ["Net Income", "Net Earnings", "Net Profit", "Income Available to Common Stockholders"],
+    "Cash": ["Cash", "Cash and Cash Equivalents", "Cash & Equivalents"],
+    "Total Debt": ["Long Term Debt", "Total Debt", "Total Liabilities"],
+    "Equity": ["Total Stockholder Equity", "Total Equity", "Shareholder Equity"],
+    "Operating Cash Flow": ["Total Cash From Operating Activities", "Net Cash Provided by Operating Activities"],
+    "CapEx": ["Capital Expenditures", "Purchase of Property and Equipment"],
+    "Buybacks": ["Repurchase Of Stock", "Share Repurchase", "Treasury Stock Purchased"]
+}
+
 # === Analysis & Helper Functions ===
-def extract_latest(series, fallback=None):
+ef extract_latest(series, fallback=None):
     try:
         value = series.dropna().iloc[0]
         return int(value) if float(value).is_integer() else round(float(value), 2)
     except:
         return fallback
 
-def safe_extract(df, labels):
+def safe_extract(df, key):
+    labels = FINANCIAL_LABEL_ALIASES.get(key, [key])
+    normalized_index = {i.lower(): i for i in df.index}
     for label in labels:
-        if label in df.index:
-            return extract_latest(df.loc[label])
+        label_lower = label.lower()
+        if label_lower in normalized_index:
+            return extract_latest(df.loc[normalized_index[label_lower]])
+    print(f"[WARN] Missing: {key} - Checked: {labels}")
     return None
 
 def calculate_trends(df, line_item):
-    if line_item not in df.index:
-        return None
-    values = df.loc[line_item].dropna().astype(float)
-    if len(values) < 2:
-        return None
-    cagr = ((values[0] / values[-1]) ** (1 / (len(values) - 1)) - 1) * 100
-    return round(cagr, 2)
+    aliases = FINANCIAL_LABEL_ALIASES.get(line_item, [line_item])
+    for label in aliases:
+        if label in df.index:
+            values = df.loc[label].dropna().astype(float)
+            if len(values) < 2:
+                return None
+            cagr = ((values[0] / values[-1]) ** (1 / (len(values) - 1)) - 1) * 100
+            return round(cagr, 2)
+    return None
 
 def label_source(value, source):
     return {"value": value, "source": source if value is not None else "Missing"}
