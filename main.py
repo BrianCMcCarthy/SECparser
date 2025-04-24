@@ -548,6 +548,36 @@ def generate_irr():
 
     return jsonify({"ticker": ticker.upper(), "irr_table": data.get("IRR Table", "Not Available")})
 
+@app.route("/generate-narrative", methods=["GET"])
+def generate_narrative():
+    ticker = request.args.get("ticker")
+    peers = request.args.get("peers", "")
+    peer_list = [p.strip().upper() for p in peers.split(",") if p.strip()]
+
+    if not ticker:
+        return jsonify({"error": "Missing 'ticker' parameter"}), 400
+
+    main_summary = analyze_company(ticker.upper())
+    peer_summaries = [analyze_company(p) for p in peer_list]
+    parsed = parse_uploaded_content()
+
+    insights = []
+    for peer in peer_summaries:
+        if peer["Gross Margin (%)"]["value"] and main_summary["Gross Margin (%)"]["value"]:
+            if peer["Gross Margin (%)"]["value"] > main_summary["Gross Margin (%)"]["value"] + 2:
+                insights.append(f"{main_summary['Ticker']} gross margin is below {peer['Ticker']}.")
+
+        if peer["SG&A as % of Revenue"]["value"] and main_summary["SG&A as % of Revenue"]["value"]:
+            if peer["SG&A as % of Revenue"]["value"] < main_summary["SG&A as % of Revenue"]["value"] - 2:
+                insights.append(f"{main_summary['Ticker']} SG&A ratio is higher than {peer['Ticker']}.")
+
+        if peer["FCF Margin (%)"]["value"] and main_summary["FCF Margin (%)"]["value"]:
+            if peer["FCF Margin (%)"]["value"] > main_summary["FCF Margin (%)"]["value"] + 2:
+                insights.append(f"{main_summary['Ticker']} FCF margin lags {peer['Ticker']}.")
+
+    narrative = generate_longform_prompt(main_summary, peer_summaries, insights, parsed)
+    return jsonify({"narrative": narrative})
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
